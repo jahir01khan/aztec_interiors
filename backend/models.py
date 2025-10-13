@@ -63,7 +63,7 @@ class User(db.Model):
     phone = db.Column(db.String(20))
 
     # Role & permissions
-    role = db.Column(db.String(20), default='user')  # admin, manager, user
+    role = db.Column(db.String(20), default='user')
     department = db.Column(db.String(50))
 
     # Account status
@@ -914,8 +914,10 @@ class Assignment(db.Model):
     title = db.Column(db.String(255), nullable=False)
     date = db.Column(db.Date, nullable=False)
     
-    # Staff assignment
-    staff_id = db.Column(db.Integer, db.ForeignKey('fitters.id'), nullable=False)
+    # Staff assignment - now just a string field
+    team_member = db.Column(db.String(200))  # Store name as string
+
+    calendar_event_id = db.Column(db.String(255), nullable=True)
     
     # Job-related fields
     job_id = db.Column(db.String(36), db.ForeignKey('jobs.id'))
@@ -938,7 +940,6 @@ class Assignment(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    staff = db.relationship('Fitter', backref='assignments')
     job = db.relationship('Job', backref='assignments')
     customer = db.relationship('Customer', backref='assignments')
     
@@ -960,7 +961,7 @@ class Assignment(db.Model):
             'type': self.type,
             'title': self.title,
             'date': self.date.isoformat() if self.date else None,
-            'staff_id': str(self.staff_id),
+            'team_member': self.team_member,  # Return as string
             'job_id': self.job_id,
             'customer_id': self.customer_id,
             'start_time': self.start_time.strftime('%H:%M') if self.start_time else None,
@@ -972,7 +973,6 @@ class Assignment(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             # Include related data
-            'staff_name': self.staff.name if self.staff else None,
             'job_reference': self.job.job_reference if self.job else None,
             'customer_name': self.customer.name if self.customer else None,
         }

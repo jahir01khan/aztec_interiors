@@ -526,129 +526,6 @@ def get_pipeline_data():
     return jsonify(pipeline_items)
 
 
-@db_bp.route('/assignments', methods=['GET', 'POST'])
-def handle_assignments():
-    if request.method == 'POST':
-        data = request.json
-        
-        try:
-            start_time = None
-            end_time = None
-            if data.get('start_time'):
-                start_time = datetime.strptime(data['start_time'], '%H:%M').time()
-            if data.get('end_time'):
-                end_time = datetime.strptime(data['end_time'], '%H:%M').time()
-            
-            estimated_hours = None
-            if start_time and end_time:
-                start_datetime = datetime.combine(datetime.today(), start_time)
-                end_datetime = datetime.combine(datetime.today(), end_time)
-                duration = end_datetime - start_datetime
-                estimated_hours = duration.total_seconds() / 3600
-            assignment = Assignment(
-                type=data.get('type', 'job'),
-                title=data.get('title', ''),
-                date=datetime.strptime(data['date'], '%Y-%m-%d').date(),
-                staff_id=int(data['staff_id']),
-                job_id=data.get('job_id'),
-                customer_id=data.get('customer_id'),
-                start_time=start_time,
-                end_time=end_time,
-                estimated_hours=estimated_hours,
-                notes=data.get('notes'),
-                priority=data.get('priority', 'Medium'),
-                status=data.get('status', 'Scheduled'),
-                created_by=data.get('created_by', 'system')
-            )
-            if not assignment.title:
-                if assignment.type == 'job':
-                    if assignment.job:
-                        assignment.title = f"{assignment.job.job_reference} - {assignment.job.customer.name}"
-                    elif assignment.customer:
-                        assignment.title = f"Job - {assignment.customer.name}"
-                    else:
-                        assignment.title = "Job Assignment"
-                elif assignment.type == 'off':
-                    assignment.title = "Day Off"
-                elif assignment.type == 'delivery':
-                    assignment.title = "Deliveries"
-                elif assignment.type == 'note':
-                    assignment.title = assignment.notes or "Note"
-            
-            db.session.add(assignment)
-            db.session.commit()
-            return jsonify({
-                'id': assignment.id,
-                'message': 'Assignment created successfully',
-                'assignment': assignment.to_dict()
-            }), 201
-        except Exception as e:
-            db.session.rollback()
-            return jsonify({'error': str(e)}), 400
-    try:
-        start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
-        staff_id = request.args.get('staff_id')
-        query = Assignment.query
-        if start_date:
-            query = query.filter(Assignment.date >= datetime.strptime(start_date, '%Y-%m-%d').date())
-        if end_date:
-            query = query.filter(Assignment.date <= datetime.strptime(end_date, '%Y-%m-%d').date())
-        if staff_id:
-            query = query.filter(Assignment.staff_id == int(staff_id))
-        assignments = query.order_by(Assignment.date.desc(), Assignment.start_time).all()
-        return jsonify([assignment.to_dict() for assignment in assignments])
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
-
-@db_bp.route('/assignments/<string:assignment_id>', methods=['GET', 'PUT', 'DELETE'])
-def handle_single_assignment(assignment_id):
-    assignment = Assignment.query.get_or_404(assignment_id)
-    if request.method == 'GET':
-        return jsonify(assignment.to_dict())
-    elif request.method == 'PUT':
-        try:
-            data = request.json
-            assignment.type = data.get('type', assignment.type)
-            assignment.title = data.get('title', assignment.title)
-            assignment.staff_id = int(data.get('staff_id', assignment.staff_id))
-            assignment.job_id = data.get('job_id', assignment.job_id)
-            assignment.customer_id = data.get('customer_id', assignment.customer_id)
-            assignment.notes = data.get('notes', assignment.notes)
-            assignment.priority = data.get('priority', assignment.priority)
-            assignment.status = data.get('status', assignment.status)
-            assignment.updated_by = data.get('updated_by', 'system')
-            if 'date' in data:
-                assignment.date = datetime.strptime(data['date'], '%Y-%m-%d').date()
-            if 'start_time' in data and data['start_time']:
-                assignment.start_time = datetime.strptime(data['start_time'], '%H:%M').time()
-            if 'end_time' in data and data['end_time']:
-                assignment.end_time = datetime.strptime(data['end_time'], '%H:%M').time()
-            if assignment.start_time and assignment.end_time:
-                start_datetime = datetime.combine(datetime.today(), assignment.start_time)
-                end_datetime = datetime.combine(datetime.today(), assignment.end_time)
-                duration = end_datetime - start_datetime
-                assignment.estimated_hours = duration.total_seconds() / 3600
-            
-            db.session.commit()
-            
-            return jsonify({
-                'message': 'Assignment updated successfully',
-                'assignment': assignment.to_dict()
-            })
-            
-        except Exception as e:
-            db.session.rollback()
-            return jsonify({'error': str(e)}), 400
-    
-    elif request.method == 'DELETE':
-        try:
-            db.session.delete(assignment)
-            db.session.commit()
-            return jsonify({'message': 'Assignment deleted successfully'})
-        except Exception as e:
-            db.session.rollback()
-            return jsonify({'error': str(e)}), 400
 @db_bp.route('/fitters', methods=['GET'])
 def get_fitters():
     """Get all active fitters for team member dropdown"""
@@ -706,3 +583,104 @@ def get_active_customers():
         ])
     except Exception as e:
         return jsonify({'error': str(e)}), 400
+@db_bp.route('/customers/<string:customer_id>/stage', methods=['PATCH'])
+def update_customer_stage(customer_id):
+    """Update customer stage - optimized endpoint for drag and drop"""
+    try:
+        customer = Customer.query.get_or_404(customer_id)
+        
+        data = request.json
+        new_stage = data.get('stage')
+        reason = data.get('reason', 'Stage updated via drag and drop')
+        updated_by = data.get('updated_by', 'System')
+        
+        if not new_stage:
+            return jsonify({'error': 'Stage is required'}), 400
+        
+        # Valid stages
+        valid_stages = [
+            "Lead", "Quote", "Consultation", "Survey", "Measure", 
+            "Design", "Quoted", "Accepted", "OnHold", "Production", 
+            "Delivery", "Installation", "Complete", "Remedial", "Cancelled"
+        ]
+        
+        if new_stage not in valid_stages:
+            return jsonify({'error': 'Invalid stage'}), 400
+        
+        # Update stage
+        old_stage = customer.stage
+        customer.stage = new_stage
+        customer.updated_by = updated_by
+        customer.updated_at = datetime.utcnow()
+        
+        # Optional: Add to notes for audit trail
+        note_entry = f"\n[{datetime.utcnow().isoformat()}] Stage changed from {old_stage} to {new_stage}. Reason: {reason}"
+        if customer.notes:
+            customer.notes += note_entry
+        else:
+            customer.notes = note_entry
+        
+        # CRITICAL: Commit the changes to the database
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Stage updated successfully',
+            'customer_id': customer.id,
+            'old_stage': old_stage,
+            'new_stage': new_stage
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
+@db_bp.route('/jobs/<string:job_id>/stage', methods=['PATCH'])
+def update_job_stage(job_id):
+    """Update job stage - optimized endpoint for drag and drop"""
+    try:
+        job = Job.query.get_or_404(job_id)
+        
+        data = request.json
+        new_stage = data.get('stage')
+        reason = data.get('reason', 'Stage updated via drag and drop')
+        updated_by = data.get('updated_by', 'System')
+        
+        if not new_stage:
+            return jsonify({'error': 'Stage is required'}), 400
+        
+        # Valid stages
+        valid_stages = [
+            "Lead", "Quote", "Consultation", "Survey", "Measure", 
+            "Design", "Quoted", "Accepted", "OnHold", "Production", 
+            "Delivery", "Installation", "Complete", "Remedial", "Cancelled"
+        ]
+        
+        if new_stage not in valid_stages:
+            return jsonify({'error': 'Invalid stage'}), 400
+        
+        # Update stage
+        old_stage = job.stage
+        job.stage = new_stage
+        job.updated_at = datetime.utcnow()
+        
+        # Optional: Add to notes for audit trail
+        note_entry = f"\n[{datetime.utcnow().isoformat()}] Stage changed from {old_stage} to {new_stage}. Reason: {reason}"
+        if job.notes:
+            job.notes += note_entry
+        else:
+            job.notes = note_entry
+        
+        # CRITICAL: Commit the changes to the database
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Stage updated successfully',
+            'job_id': job.id,
+            'old_stage': old_stage,
+            'new_stage': new_stage
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500

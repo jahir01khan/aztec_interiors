@@ -102,56 +102,60 @@ def admin_required(f):
 def register():
     """Register a new user"""
     try:
-        data = request.get_json()
-        
+        data = request.get_json() or {}
+
         # Validate required fields
-        required_fields = ['email', 'password', 'first_name', 'last_name']
+        required_fields = ['email', 'password', 'first_name', 'last_name', 'role']
         for field in required_fields:
             if not data.get(field):
                 return jsonify({'error': f'{field} is required'}), 400
-        
+
         email = data['email'].lower().strip()
         password = data['password']
         first_name = data['first_name'].strip()
         last_name = data['last_name'].strip()
-        
+        role = data['role'].strip()
+
         # Validate email format
         if not validate_email(email):
             return jsonify({'error': 'Invalid email format'}), 400
-        
+
         # Validate password strength
         is_valid, message = validate_password(password)
         if not is_valid:
             return jsonify({'error': message}), 400
-        
+
+        # Validate role against allowed values
+        allowed_roles = ['Admin', 'Staff', 'Secratary']  # keep spelling as requested
+        if role not in allowed_roles:
+            return jsonify({'error': f'Invalid role: must be one of {allowed_roles}'}), 400
+
         # Check if user already exists
         if User.query.filter_by(email=email).first():
             return jsonify({'error': 'Email already registered'}), 409
-        
-        # Create new user
+
+        # Create new user (do not rely on phone/department from the client anymore)
         user = User(
             email=email,
             first_name=first_name,
             last_name=last_name,
-            phone=data.get('phone', '').strip(),
-            department=data.get('department', '').strip(),
-            role=data.get('role', 'user'),  # Default role
+            role=role,
             is_active=True
         )
         user.set_password(password)
         user.generate_verification_token()
-        
+
         db.session.add(user)
         db.session.commit()
-        
+
         # Log successful registration
         log_login_attempt(email, get_client_ip(), True)
-        
+
         return jsonify({
             'message': 'User registered successfully',
             'user': user.to_dict()
         }), 201
-        
+
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
