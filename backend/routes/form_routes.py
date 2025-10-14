@@ -1,10 +1,11 @@
-# routes/form_routes.py - Fixed to create only one submission record
-from flask import Blueprint, request, jsonify, current_app
-from models import db, Customer, CustomerFormData
+from flask import Blueprint, request, jsonify, current_app, send_file
+from models import db, Customer, CustomerFormData # Assuming these models exist
 import secrets
 import string
 import json
 from datetime import datetime, timedelta
+from io import BytesIO
+from fpdf import FPDF # <-- Now using fpdf2
 
 form_bp = Blueprint("form", __name__)
 
@@ -14,6 +15,202 @@ form_tokens = {}
 def generate_secure_token(length=32):
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(length))
+
+# ------------------------------------------------------------------------
+# 🛠️ PDF GENERATION HELPERS (Using fpdf2)
+# ------------------------------------------------------------------------
+
+class PDF(FPDF):
+    """Custom PDF class for consistent headers and footers."""
+    def header(self):
+        # NOTE: fpdf2 cannot easily embed complex SVGs. We'll use text.
+        self.set_font('Arial', 'B', 16)
+        self.cell(0, 10, 'AZTEC INTERIORS', 0, 1, 'C')
+        self.set_font('Arial', 'B', 12)
+        self.cell(0, 10, 'REMEDIAL WORK CHECKLIST', 0, 1, 'C')
+        self.ln(5)
+        
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Arial', 'I', 8)
+        self.cell(0, 10, f'Page {self.page_no()}/{{nb}}', 0, 0, 'C')
+
+@form_bp.route('/checklists/download-pdf', methods=['POST'])
+def download_checklist_pdf():
+    """Generates PDF on the server using fpdf2."""
+    try:
+        data = request.get_json(silent=True) or {}
+        
+        if not data or not data.get('items'):
+            return jsonify({'error': 'Missing form data for PDF generation.'}), 400
+
+        pdf = PDF('P', 'mm', 'A4')
+        pdf.alias_nb_pages()
+        pdf.add_page()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.set_font('Arial', '', 10)
+
+        # --- 1. Customer and Fitter Details ---
+        pdf.set_fill_color(240, 240, 240) 
+        pdf.set_draw_color(0, 0, 0) 
+        col_width = 190 / 2
+        line_height = 6
+
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(col_width, line_height, 'CUSTOMER NAME:', 1, 0, 'L', 1)
+        pdf.set_font('Arial', '', 10)
+        pdf.cell(col_width, line_height, data.get('customerName', 'N/A'), 1, 1, 'L', 0)
+        
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(col_width, line_height, 'CUSTOMER ADDRESS:', 1, 0, 'L', 1)
+        pdf.set_font('Arial', '', 10)
+        pdf.cell(col_width, line_height, data.get('customerAddress', 'N/A'), 1, 1, 'L', 0)
+
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(col_width, line_height, 'CUSTOMER TEL NO.:', 1, 0, 'L', 1)
+        pdf.set_font('Arial', '', 10)
+        pdf.cell(col_width, line_height, data.get('customerPhone', 'N/A'), 1, 1, 'L', 0)
+
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(col_width, line_height, 'DATE:', 1, 0, 'L', 1)
+        pdf.set_font('Arial', '', 10)
+        pdf.cell(col_width, line_height, data.get('date', 'N/A'), 1, 1, 'L', 0)
+
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(col_width, line_height, 'FITTERS:', 1, 0, 'L', 1)
+        pdf.set_font('Arial', '', 10)
+        pdf.cell(col_width, line_height, data.get('fitters', 'N/A'), 1, 1, 'L', 0)
+        
+        pdf.ln(10)
+        
+        # --- 2. Checklist Items Table ---
+        
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(0, 5, 'Items Required for Remedial Action', 0, 1, 'L')
+        pdf.ln(1)
+        
+        header = ['NO', 'ITEM', 'REMEDIAL ACTION', 'COLOUR', 'SIZE', 'QTY']
+        widths = [10, 50, 60, 25, 25, 20]
+        
+        pdf.set_fill_color(200, 220, 255) 
+        pdf.set_font('Arial', 'B', 9)
+        
+        for i, h in enumerate(header):
+            pdf.cell(widths[i], 7, h, 1, 0, 'C', 1)
+        pdf.ln()
+
+        # Table Rows
+        pdf.set_font('Arial', '', 9)
+        pdf.set_fill_color(255, 255, 255)
+        
+        for index, item in enumerate(data.get('items', [])):
+            if not item.get('item') and not item.get('remedialAction'):
+                continue
+            
+            row_data = [
+                str(index + 1),
+                item.get('item', ''),
+                item.get('remedialAction', ''),
+                item.get('colour', ''),
+                item.get('size', ''),
+                str(item.get('qty', '')),
+            ]
+            
+            max_height = 5
+            
+            # Start multi_cell processing
+            x_start = pdf.get_x()
+            y_start = pdf.get_y()
+
+            # Item (Multi-line text in column 2)
+            pdf.set_xy(x_start + widths[0], y_start)
+            pdf.multi_cell(widths[1], 4, row_data[1], 0, 'L', 0, False)
+            h_item = pdf.get_y() - y_start
+            
+            # Remedial Action (Multi-line text in column 3)
+            pdf.set_xy(x_start + widths[0] + widths[1], y_start)
+            pdf.multi_cell(widths[2], 4, row_data[2], 0, 'L', 0, False)
+            h_action = pdf.get_y() - y_start
+
+            row_h = max(max_height, h_item, h_action)
+            pdf.set_xy(x_start, y_start) # Reset position for drawing cells
+
+            # Draw cells based on calculated height
+            for i, txt in enumerate(row_data):
+                align = 'C' if i == 0 or i >= 3 else 'L'
+                
+                if i in [1, 2]: # Item and Remedial Action
+                    x = pdf.get_x()
+                    y = pdf.get_y()
+                    pdf.multi_cell(widths[i], row_h, txt, 1, 'L', 0, False)
+                    pdf.set_xy(x + widths[i], y) # Move cursor right
+                else:
+                    # Other columns (NO, COLOUR, SIZE, QTY)
+                    pdf.cell(widths[i], row_h, txt, 1, 0, align, 0)
+            
+            pdf.ln(row_h)
+        
+        # --- 3. Return the PDF ---
+        pdf_output = pdf.output(dest='S')
+        pdf_file = BytesIO(pdf_output)
+
+        customer_name = data.get('customerName', 'Customer').replace(' ', '_')
+        date_str = data.get('date', datetime.now().strftime('%Y-%m-%d'))
+        filename = f"Remedial_Checklist_{customer_name}_{date_str}.pdf"
+        
+        return send_file(
+            pdf_file,
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=filename
+        )
+
+    except Exception as e:
+        current_app.logger.exception(f"PDF generation failed on server (fpdf2): {e}")
+        return jsonify({"error": f"Server failed to generate PDF: {str(e)}"}), 500
+
+# ========================================================================
+# 🛠️ ROUTE: CHECKLIST SAVE (Internal Staff Forms)
+# ========================================================================
+@form_bp.route('/checklists/save', methods=['POST', 'OPTIONS'])
+def save_checklist():
+    """
+    Handles POST requests to save internal staff checklists (e.g., Remedial Action Checklist).
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    try:
+        data = request.get_json(silent=True) or {}
+        checklist_type = data.get('checklistType', 'unknown')
+        customer_id = data.get('customerId')
+        customer_name = data.get('customerName', 'N/A')
+
+        customer = Customer.query.get(customer_id)
+        if not customer:
+            return jsonify({'error': 'Customer not found, cannot save checklist'}), 404
+            
+        customer_form_data = CustomerFormData(
+            customer_id=customer_id,
+            form_data=json.dumps(data), 
+            token_used='', 
+            submitted_at=datetime.utcnow()
+        )
+        
+        db.session.add(customer_form_data)
+        db.session.commit()
+        
+        current_app.logger.info(f"Staff checklist '{checklist_type}' saved for customer {customer_id} ({customer_name}). ID: {customer_form_data.id}")
+
+        return jsonify({
+            "message": f"{checklist_type.title()} Checklist saved successfully!",
+            "form_submission_id": customer_form_data.id
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception(f"Error saving internal checklist: {e}")
+        return jsonify({"error": f"Failed to save checklist: {str(e)}"}), 500
 
 @form_bp.route('/customers/<customer_id>/generate-form-link', methods=['POST', 'OPTIONS'])
 def generate_customer_form_link(customer_id):
@@ -254,3 +451,35 @@ def cleanup_expired_tokens():
     except Exception as e:
         current_app.logger.exception("Cleanup failed")
         return jsonify({'success': False, 'error': f'Cleanup failed: {str(e)}'}), 500
+
+# ========================================================================
+# 🗑️ ROUTE: DELETE FORM SUBMISSION
+# ========================================================================
+@form_bp.route('/form-submissions/<int:submission_id>', methods=['DELETE', 'OPTIONS'])
+def delete_form_submission(submission_id):
+    """Delete a form submission by ID"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
+    try:
+        submission = CustomerFormData.query.get(submission_id)
+        if not submission:
+            current_app.logger.warning(f"Form submission {submission_id} not found")
+            return jsonify({'error': 'Form submission not found'}), 404
+        
+        customer_id = submission.customer_id
+        
+        db.session.delete(submission)
+        db.session.commit()
+        
+        current_app.logger.info(f"Form submission {submission_id} deleted successfully for customer {customer_id}")
+        
+        return jsonify({
+            'success': True, 
+            'message': 'Form submission deleted successfully'
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception(f"Error deleting form submission {submission_id}: {e}")
+        return jsonify({'error': f'Failed to delete form submission: {str(e)}'}), 500
