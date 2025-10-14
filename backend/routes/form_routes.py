@@ -1,11 +1,12 @@
+import os
 from flask import Blueprint, request, jsonify, current_app, send_file
-from models import db, Customer, CustomerFormData # Assuming these models exist
+from models import db, Customer, CustomerFormData
 import secrets
 import string
 import json
 from datetime import datetime, timedelta
 from io import BytesIO
-from fpdf import FPDF # <-- Now using fpdf2
+from fpdf import FPDF
 
 form_bp = Blueprint("form", __name__)
 
@@ -17,23 +18,251 @@ def generate_secure_token(length=32):
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 # ------------------------------------------------------------------------
-# 🛠️ PDF GENERATION HELPERS (Using fpdf2)
+# PDF GENERATION HELPERS (Using fpdf2)
 # ------------------------------------------------------------------------
 
 class PDF(FPDF):
-    """Custom PDF class for consistent headers and footers."""
     def header(self):
-        # NOTE: fpdf2 cannot easily embed complex SVGs. We'll use text.
-        self.set_font('Arial', 'B', 16)
-        self.cell(0, 10, 'AZTEC INTERIORS', 0, 1, 'C')
-        self.set_font('Arial', 'B', 12)
-        self.cell(0, 10, 'REMEDIAL WORK CHECKLIST', 0, 1, 'C')
-        self.ln(5)
+        logo_path = r"C:\Users\ayaan\Techmynt Solutions\aztec-interior\public\images\logo.png"
+        logo_width = 18
+        text_margin_x = 3  # Space between logo and text
         
+        # Approximate width of the text
+        text_block_width = 50 
+        
+        # Total combined width
+        combined_width = logo_width + text_margin_x + text_block_width 
+        
+        # Calculate X position for centering
+        page_width = 210  # A4 width in mm
+        x_start_centered = (page_width - combined_width) / 2
+        
+        y_start = 8 
+        logo_height_used = 20
+        content_after_header_y = y_start + logo_height_used + 5
+
+        if os.path.exists(logo_path):
+            try:
+                # Place the logo
+                self.image(logo_path, x=x_start_centered, y=y_start, w=logo_width)
+                
+                # Calculate text starting position
+                text_x_start = x_start_centered + logo_width + text_margin_x
+                
+                # Company Name - use cell instead of multi_cell
+                self.set_xy(text_x_start, y_start + 2)  # +2 for slight vertical adjustment
+                self.set_font('Arial', 'B', 16)
+                self.cell(text_block_width, 7, 'AZTEC INTERIORS', 0, 0, 'L')
+                
+                # Official Receipt - use cell instead of multi_cell
+                self.set_xy(text_x_start, y_start + 10)  # Position below company name
+                self.set_font('Arial', '', 12)
+                self.cell(text_block_width, 5, 'OFFICIAL RECEIPT', 0, 0, 'L')
+                
+                # Set cursor for body content
+                self.set_y(content_after_header_y)
+                
+            except Exception as e:
+                # Fallback if image fails
+                self.set_y(y_start)
+                self.set_font('Arial', 'B', 16)
+                self.cell(0, 10, 'AZTEC INTERIORS', 0, 1, 'C')
+                self.set_font('Arial', '', 12)
+                self.cell(0, 5, 'OFFICIAL RECEIPT', 0, 1, 'C')
+                self.ln(5)
+        else:
+            # Fallback if logo not found
+            self.set_y(y_start)
+            self.set_font('Arial', 'B', 16)
+            self.cell(0, 10, 'AZTEC INTERIORS', 0, 1, 'C')
+            self.set_font('Arial', '', 12)
+            self.cell(0, 5, 'OFFICIAL RECEIPT', 0, 1, 'C')
+            self.ln(5)
+            
     def footer(self):
-        self.set_y(-15)
+        self.set_y(-25)
+        self.set_font('Arial', 'B', 8)
+        self.cell(0, 5, 'Aztec Interiors (Leicester) Ltd', 0, 1, 'C')
+        self.set_font('Arial', '', 8)
+        self.cell(0, 4, '127b Barkby Road (Entrance on Lewisher Road), Leicester LE4 9LG', 0, 1, 'C')
+        self.cell(0, 4, 'Tel: 0116 2764516 | www.aztecinteriors.co.uk', 0, 1, 'C')
+        self.cell(0, 4, 'Registered to England No. 5246691 | VAT Reg No. 846 8818 72', 0, 1, 'C')
+        self.set_y(-8)
         self.set_font('Arial', 'I', 8)
-        self.cell(0, 10, f'Page {self.page_no()}/{{nb}}', 0, 0, 'C')
+        self.cell(0, 5, f'Page {self.page_no()}/{{nb}}', 0, 0, 'C')
+# ------------------------------------------------------------------------
+# ROUTE: RECEIPT PDF DOWNLOAD
+# ------------------------------------------------------------------------
+@form_bp.route('/receipts/download-pdf', methods=['POST', 'OPTIONS'])
+def download_receipt_pdf():
+    """Generates a PDF receipt based on form data."""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+        
+    try:
+        data = request.get_json(silent=True) or {}
+        
+        if not data:
+            return jsonify({'error': 'Missing receipt data.'}), 400
+
+        pdf = PDF('P', 'mm', 'A4')
+        pdf.alias_nb_pages()
+        pdf.add_page()
+        pdf.set_auto_page_break(auto=True, margin=30) # Increased margin for footer
+        
+        # --- Header (Title only, company name comes from PDF.header() method) ---
+        pdf.set_font('Arial', 'B', 14)
+        pdf.cell(0, 5, 'OFFICIAL RECEIPT', 0, 1, 'C')
+        pdf.ln(10)
+        
+        pdf.set_font('Arial', '', 10)
+
+        # --- 1. Customer and Date Details ---
+        pdf.set_fill_color(240, 240, 240)
+        pdf.set_draw_color(0, 0, 0)
+        col_width = 190 / 2
+        line_height = 7
+        
+        pdf.set_font('Arial', 'B', 12)
+        pdf.cell(col_width, line_height, 'Customer Details', 'T', 0, 'L', 1)
+        pdf.cell(col_width, line_height, 'Date', 'T', 1, 'R', 1)
+        pdf.set_font('Arial', '', 10)
+        
+        # Row 1: Name and Date
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(30, line_height, 'Name:', 0, 0, 'L')
+        pdf.set_font('Arial', '', 10)
+        pdf.cell(col_width - 30, line_height, data.get('customerName', 'N/A'), 0, 0, 'L')
+        pdf.set_font('Arial', '', 10)
+        pdf.cell(col_width, line_height, data.get('receiptDate', datetime.now().strftime('%d/%m/%Y')), 0, 1, 'R')
+        
+        # Row 2: Address
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(30, line_height, 'Address:', 0, 0, 'L')
+        pdf.set_font('Arial', '', 10)
+        pdf.multi_cell(col_width - 30, line_height, data.get('customerAddress', 'N/A'), 0, 'L', 0)
+        
+        # Row 3: Phone
+        y_after_address = pdf.get_y()
+        pdf.set_font('Arial', 'B', 10)
+        pdf.set_xy(10, y_after_address)
+        pdf.cell(30, line_height, 'Phone:', 'B', 0, 'L')
+        pdf.set_font('Arial', '', 10)
+        pdf.cell(col_width - 30, line_height, data.get('customerPhone', 'N/A'), 'B', 1, 'L')
+        pdf.ln(5)
+
+        # --- 2. Payment Confirmation Message ---
+        pdf.set_font('Arial', '', 11)
+        pdf.multi_cell(0, 6, f"Confirmation of payment received by BACS for {data.get('paymentDescription', 'your Kitchen/Bedroom Cabinetry')}", 0, 'L')
+        pdf.ln(5)
+
+        # --- 3. Paid Amount (Highlight) ---
+        pdf.set_fill_color(230, 230, 230)
+        pdf.set_font('Arial', 'B', 14)
+        
+        paid_amount_str = f"£{data.get('paidAmount', 0):,.2f}"
+
+        pdf.cell(col_width, 10, 'Paid:', 1, 0, 'L', 1)
+        pdf.set_font('Arial', 'B', 16)
+        pdf.cell(col_width, 10, paid_amount_str, 1, 1, 'R', 1)
+        pdf.ln(5)
+
+        # --- 4. Summary Details ---
+        pdf.set_font('Arial', 'B', 11)
+        
+        # Paid to Date
+        paid_to_date_str = f"£{data.get('totalPaidToDate', 0):,.2f}"
+        pdf.cell(col_width, 7, 'Paid to date:', 'T', 0, 'L')
+        pdf.set_font('Arial', '', 11)
+        pdf.cell(col_width, 7, paid_to_date_str, 'T', 1, 'R')
+
+        # Balance to Pay
+        balance_str = f"£{data.get('balanceToPay', 0):,.2f}"
+        pdf.set_font('Arial', 'B', 12)
+        pdf.cell(col_width, 8, 'Balance to Pay:', 'T', 0, 'L')
+        pdf.set_font('Arial', 'B', 12)
+        pdf.cell(col_width, 8, balance_str, 'T', 1, 'R')
+        pdf.ln(10)
+        
+        # --- 5. Signature ---
+        pdf.set_font('Arial', '', 11)
+        pdf.cell(0, 5, 'Many Thanks', 0, 1, 'L')
+        pdf.ln(5)
+        pdf.set_font('Arial', 'I', 12)
+        pdf.cell(0, 5, 'Shahida Macci', 0, 1, 'L')
+
+        # --- 6. Return the PDF ---
+        pdf_output = pdf.output(dest='S')
+        pdf_file = BytesIO(pdf_output)
+
+        customer_name = data.get('customerName', 'Customer').replace(' ', '_')
+        date_str = data.get('receiptDate', datetime.now().strftime('%Y-%m-%d'))
+        filename = f"Receipt_{data.get('receiptType', 'Payment').title()}_{customer_name}_{date_str}.pdf"
+        
+        return send_file(
+            pdf_file,
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=filename
+        )
+
+    except Exception as e:
+        current_app.logger.exception(f"Receipt PDF generation failed: {e}")
+        return jsonify({"error": f"Server failed to generate Receipt PDF: {str(e)}"}), 500
+
+
+# ------------------------------------------------------------------------
+# ROUTE: RECEIPT SAVE (Saves Receipt Data as a Form Submission)
+# ------------------------------------------------------------------------
+@form_bp.route('/receipts/save', methods=['POST', 'OPTIONS'])
+def save_receipt():
+    """
+    Saves receipt data as a CustomerFormData entry.
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    try:
+        data = request.get_json(silent=True) or {}
+        customer_id = data.get('customerId')
+        
+        if not customer_id:
+            return jsonify({'error': 'Missing customer ID'}), 400
+            
+        customer = Customer.query.get(customer_id)
+        if not customer:
+            return jsonify({'error': 'Customer not found, cannot save receipt'}), 404
+            
+        # Add a unique identifier/type to the data to distinguish it as a receipt
+        data['form_type'] = f"receipt_{data.get('receiptType', 'general')}"
+        data['is_receipt'] = True
+
+        customer_form_data = CustomerFormData(
+            customer_id=customer_id,
+            form_data=json.dumps(data),
+            token_used=f"RECEIPT-{data.get('receiptType', '').upper()}-{customer_id}-{datetime.utcnow().timestamp()}",
+            submitted_at=datetime.utcnow()
+        )
+        
+        db.session.add(customer_form_data)
+        db.session.commit()
+        
+        current_app.logger.info(f"Receipt saved for customer {customer_id} (Type: {data['receiptType']}). ID: {customer_form_data.id}")
+
+        return jsonify({
+            "message": f"Receipt ({data['receiptType'].title()}) saved successfully!",
+            "form_submission_id": customer_form_data.id
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception(f"Error saving receipt: {e}")
+        return jsonify({"error": f"Failed to save receipt: {str(e)}"}), 500
+
+
+# ------------------------------------------------------------------------
+# REMAINING ORIGINAL ROUTES (Checklist PDF, Checklist Save, Tokens, Delete)
+# ------------------------------------------------------------------------
 
 @form_bp.route('/checklists/download-pdf', methods=['POST'])
 def download_checklist_pdf():
@@ -51,8 +280,8 @@ def download_checklist_pdf():
         pdf.set_font('Arial', '', 10)
 
         # --- 1. Customer and Fitter Details ---
-        pdf.set_fill_color(240, 240, 240) 
-        pdf.set_draw_color(0, 0, 0) 
+        pdf.set_fill_color(240, 240, 240)
+        pdf.set_draw_color(0, 0, 0)
         col_width = 190 / 2
         line_height = 6
 
@@ -64,7 +293,7 @@ def download_checklist_pdf():
         pdf.set_font('Arial', 'B', 10)
         pdf.cell(col_width, line_height, 'CUSTOMER ADDRESS:', 1, 0, 'L', 1)
         pdf.set_font('Arial', '', 10)
-        pdf.cell(col_width, line_height, data.get('customerAddress', 'N/A'), 1, 1, 'L', 0)
+        pdf.multi_cell(col_width, line_height, data.get('customerAddress', 'N/A'), 1, 'L', 0)
 
         pdf.set_font('Arial', 'B', 10)
         pdf.cell(col_width, line_height, 'CUSTOMER TEL NO.:', 1, 0, 'L', 1)
@@ -92,7 +321,7 @@ def download_checklist_pdf():
         header = ['NO', 'ITEM', 'REMEDIAL ACTION', 'COLOUR', 'SIZE', 'QTY']
         widths = [10, 50, 60, 25, 25, 20]
         
-        pdf.set_fill_color(200, 220, 255) 
+        pdf.set_fill_color(200, 220, 255)
         pdf.set_font('Arial', 'B', 9)
         
         for i, h in enumerate(header):
@@ -170,7 +399,7 @@ def download_checklist_pdf():
         return jsonify({"error": f"Server failed to generate PDF: {str(e)}"}), 500
 
 # ========================================================================
-# 🛠️ ROUTE: CHECKLIST SAVE (Internal Staff Forms)
+# ROUTE: CHECKLIST SAVE (Internal Staff Forms)
 # ========================================================================
 @form_bp.route('/checklists/save', methods=['POST', 'OPTIONS'])
 def save_checklist():
@@ -192,8 +421,8 @@ def save_checklist():
             
         customer_form_data = CustomerFormData(
             customer_id=customer_id,
-            form_data=json.dumps(data), 
-            token_used='', 
+            form_data=json.dumps(data),
+            token_used='',
             submitted_at=datetime.utcnow()
         )
         
@@ -228,7 +457,7 @@ def generate_customer_form_link(customer_id):
             }), 404
 
         data = request.get_json(silent=True) or {}
-        form_type = data.get('formType', 'bedroom')  # bedroom or kitchen
+        form_type = data.get('formType', 'bedroom') # bedroom or kitchen
 
         token = generate_secure_token()
         expiration = datetime.now() + timedelta(hours=24)
@@ -279,7 +508,7 @@ def validate_form_token(token):
             return jsonify({'valid': False, 'error': 'Token has already been used'}), 410
 
         return jsonify({
-            'valid': True, 
+            'valid': True,
             'expires_at': token_data['expires_at'].isoformat(),
             'customer_id': token_data.get('customer_id'),
             'form_type': token_data.get('form_type')
@@ -352,7 +581,7 @@ def submit_customer_form():
                 
                 if not customer_name or not customer_address:
                     return jsonify({
-                        'success': False, 
+                        'success': False,
                         'error': 'Customer name and address are required for new customer creation'
                     }), 400
                 
@@ -364,7 +593,7 @@ def submit_customer_form():
                     created_by='Form Submission'
                 )
                 db.session.add(customer)
-                db.session.flush()  # Get the ID without committing
+                db.session.flush() # Get the ID without committing
                 customer_id = customer.id
                 current_app.logger.info(f"Created new customer {customer_id} from form submission")
 
@@ -386,7 +615,7 @@ def submit_customer_form():
             current_app.logger.info(f"Single form submission created for customer {customer_id}")
 
             return jsonify({
-                'success': True, 
+                'success': True,
                 'customer_id': customer_id,
                 'form_submission_id': customer_form_data.id,
                 'message': f'Form submitted successfully for {customer_name}'
@@ -444,8 +673,8 @@ def cleanup_expired_tokens():
         for t in expired_tokens:
             del form_tokens[t]
         return jsonify({
-            'success': True, 
-            'cleaned_tokens': len(expired_tokens), 
+            'success': True,
+            'cleaned_tokens': len(expired_tokens),
             'remaining_tokens': len(form_tokens)
         }), 200
     except Exception as e:
@@ -453,7 +682,7 @@ def cleanup_expired_tokens():
         return jsonify({'success': False, 'error': f'Cleanup failed: {str(e)}'}), 500
 
 # ========================================================================
-# 🗑️ ROUTE: DELETE FORM SUBMISSION
+# ROUTE: DELETE FORM SUBMISSION
 # ========================================================================
 @form_bp.route('/form-submissions/<int:submission_id>', methods=['DELETE', 'OPTIONS'])
 def delete_form_submission(submission_id):
@@ -475,7 +704,7 @@ def delete_form_submission(submission_id):
         current_app.logger.info(f"Form submission {submission_id} deleted successfully for customer {customer_id}")
         
         return jsonify({
-            'success': True, 
+            'success': True,
             'message': 'Form submission deleted successfully'
         }), 200
         
