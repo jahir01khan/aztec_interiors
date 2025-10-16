@@ -9,6 +9,8 @@ import re
 
 auth_bp = Blueprint('auth', __name__)
 
+# --- Configuration and Helpers (Unchanged) ---
+
 def get_client_ip():
     """Get client IP address"""
     if request.environ.get('HTTP_X_FORWARDED_FOR') is None:
@@ -55,6 +57,8 @@ def log_login_attempt(email, ip_address, success):
     db.session.add(attempt)
     db.session.commit()
 
+# --- Decorators (Updated) ---
+
 def token_required(f):
     """Decorator to require authentication"""
     @wraps(f)
@@ -89,14 +93,23 @@ def token_required(f):
     return decorated
 
 def admin_required(f):
-    """Decorator to require admin role"""
+    """
+    Decorator to require high-level access.
+    Checks if user role is Manager or HR (or Sales/Production for specific tasks if needed).
+    For full admin control (like user management), we restrict to Manager/HR.
+    """
     @wraps(f)
     @token_required
     def decorated(*args, **kwargs):
-        if request.current_user.role != 'admin':
-            return jsonify({'error': 'Admin access required'}), 403
+        # Define roles that have 'admin' level power for user management
+        ADMIN_ROLES = ['Manager', 'HR'] 
+        
+        if request.current_user.role not in ADMIN_ROLES:
+            return jsonify({'error': 'Manager or HR access required'}), 403
         return f(*args, **kwargs)
     return decorated
+
+# --- Routes (Updated) ---
 
 @auth_bp.route('/auth/register', methods=['POST'])
 def register():
@@ -126,15 +139,16 @@ def register():
             return jsonify({'error': message}), 400
 
         # Validate role against allowed values
-        allowed_roles = ['Admin', 'Staff', 'Secratary']  # keep spelling as requested
-        if role not in allowed_roles:
-            return jsonify({'error': f'Invalid role: must be one of {allowed_roles}'}), 400
+        # UPDATED: Replaced old roles with the new set based on the frontend
+        ALLOWED_ROLES = ['Manager', 'HR', 'Sales', 'Production', 'Staff'] 
+        if role not in ALLOWED_ROLES:
+            return jsonify({'error': f'Invalid role: must be one of {ALLOWED_ROLES}'}), 400
 
         # Check if user already exists
         if User.query.filter_by(email=email).first():
             return jsonify({'error': 'Email already registered'}), 409
 
-        # Create new user (do not rely on phone/department from the client anymore)
+        # Create new user 
         user = User(
             email=email,
             first_name=first_name,
@@ -162,7 +176,7 @@ def register():
 
 @auth_bp.route('/auth/login', methods=['POST'])
 def login():
-    """Login user"""
+    """Login user (Unchanged)"""
     try:
         data = request.get_json()
         
@@ -221,7 +235,7 @@ def login():
 @auth_bp.route('/auth/logout', methods=['POST'])
 @token_required
 def logout():
-    """Logout user"""
+    """Logout user (Unchanged)"""
     try:
         # Get token from header
         token = request.headers.get('Authorization').split(" ")[1]
@@ -240,7 +254,7 @@ def logout():
 @auth_bp.route('/auth/me', methods=['GET'])
 @token_required
 def get_current_user():
-    """Get current user information"""
+    """Get current user information (Unchanged)"""
     try:
         return jsonify({
             'user': request.current_user.to_dict()
@@ -251,7 +265,7 @@ def get_current_user():
 @auth_bp.route('/auth/refresh', methods=['POST'])
 @token_required
 def refresh_token():
-    """Refresh JWT token"""
+    """Refresh JWT token (Unchanged)"""
     try:
         user = request.current_user
         new_token = user.generate_jwt_token(current_app.config['SECRET_KEY'])
@@ -275,7 +289,7 @@ def refresh_token():
 
 @auth_bp.route('/auth/forgot-password', methods=['POST'])
 def forgot_password():
-    """Request password reset"""
+    """Request password reset (Unchanged)"""
     try:
         data = request.get_json()
         
@@ -304,7 +318,7 @@ def forgot_password():
 
 @auth_bp.route('/auth/reset-password', methods=['POST'])
 def reset_password():
-    """Reset password with token"""
+    """Reset password with token (Unchanged)"""
     try:
         data = request.get_json()
         
@@ -346,7 +360,7 @@ def reset_password():
 @auth_bp.route('/auth/change-password', methods=['POST'])
 @token_required
 def change_password():
-    """Change password for authenticated user"""
+    """Change password for authenticated user (Unchanged)"""
     try:
         data = request.get_json()
         
@@ -383,7 +397,7 @@ def change_password():
 @auth_bp.route('/auth/users', methods=['GET'])
 @admin_required
 def get_users():
-    """Get all users (admin only)"""
+    """Get all users (Manager/HR only)"""
     try:
         users = User.query.order_by(User.created_at.desc()).all()
         
@@ -397,7 +411,7 @@ def get_users():
 @auth_bp.route('/auth/users/<int:user_id>/toggle-status', methods=['POST'])
 @admin_required
 def toggle_user_status(user_id):
-    """Toggle user active status (admin only)"""
+    """Toggle user active status (Manager/HR only)"""
     try:
         user = User.query.get_or_404(user_id)
         

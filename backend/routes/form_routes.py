@@ -1,6 +1,6 @@
 import os
 from flask import Blueprint, request, jsonify, current_app, send_file
-from models import db, Customer, CustomerFormData
+from models import db, Customer, CustomerFormData # Assumes models are correct
 import secrets
 import string
 import json
@@ -23,6 +23,8 @@ def generate_secure_token(length=32):
 
 class PDF(FPDF):
     def header(self):
+        # NOTE: Using a static path is risky. In a production Flask app,
+        # you'd use a path relative to the app root, e.g., os.path.join(current_app.root_path, 'static', 'images', 'logo.png')
         logo_path = r"C:\Users\ayaan\Techmynt Solutions\aztec-interior\public\images\logo.png"
         logo_width = 18
         text_margin_x = 3  # Space between logo and text
@@ -54,10 +56,11 @@ class PDF(FPDF):
                 self.set_font('Arial', 'B', 16)
                 self.cell(text_block_width, 7, 'AZTEC INTERIORS', 0, 0, 'L')
                 
-                # Official Receipt - use cell instead of multi_cell
+                # Document Title (will be set dynamically by routes or default to RECEIPT)
+                title = getattr(self, 'doc_title', 'DOCUMENT')
                 self.set_xy(text_x_start, y_start + 10)  # Position below company name
                 self.set_font('Arial', '', 12)
-                self.cell(text_block_width, 5, 'OFFICIAL RECEIPT', 0, 0, 'L')
+                self.cell(text_block_width, 5, title.upper(), 0, 0, 'L')
                 
                 # Set cursor for body content
                 self.set_y(content_after_header_y)
@@ -68,7 +71,7 @@ class PDF(FPDF):
                 self.set_font('Arial', 'B', 16)
                 self.cell(0, 10, 'AZTEC INTERIORS', 0, 1, 'C')
                 self.set_font('Arial', '', 12)
-                self.cell(0, 5, 'OFFICIAL RECEIPT', 0, 1, 'C')
+                self.cell(0, 5, 'DOCUMENT', 0, 1, 'C')
                 self.ln(5)
         else:
             # Fallback if logo not found
@@ -76,7 +79,7 @@ class PDF(FPDF):
             self.set_font('Arial', 'B', 16)
             self.cell(0, 10, 'AZTEC INTERIORS', 0, 1, 'C')
             self.set_font('Arial', '', 12)
-            self.cell(0, 5, 'OFFICIAL RECEIPT', 0, 1, 'C')
+            self.cell(0, 5, 'DOCUMENT', 0, 1, 'C')
             self.ln(5)
             
     def footer(self):
@@ -90,12 +93,260 @@ class PDF(FPDF):
         self.set_y(-8)
         self.set_font('Arial', 'I', 8)
         self.cell(0, 5, f'Page {self.page_no()}/{{nb}}', 0, 0, 'C')
+
+# ------------------------------------------------------------------------
+# ROUTE: INVOICE PDF DOWNLOAD
+# ------------------------------------------------------------------------
+@form_bp.route('/invoices/download-pdf', methods=['POST', 'OPTIONS'])
+def download_invoice_pdf():
+    """Generates a PDF invoice based on data from the frontend."""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+        
+    try:
+        data = request.get_json(silent=True) or {}
+        
+        if not data:
+            return jsonify({'error': 'Missing invoice data.'}), 400
+
+        pdf = PDF('P', 'mm', 'A4')
+        pdf.doc_title = 'Invoice'
+        pdf.alias_nb_pages()
+        pdf.add_page()
+        
+        # Increased margin to prevent footer overlap
+        pdf.set_auto_page_break(auto=True, margin=35) 
+        
+        pdf.set_font('Arial', '', 10)
+        
+        # Colors for Gray Theme
+        HEADER_FILL = (230, 230, 230)
+        LINE_COLOR = (0, 0, 0)
+        
+        col_width = 190 / 2
+        line_height = 6
+        
+        # --- 1. Invoice Number and Dates (Top Right) ---
+        pdf.set_x(110)
+        pdf.set_fill_color(*HEADER_FILL)
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(40, line_height, 'INVOICE NO:', 1, 0, 'L', 1)
+        pdf.set_font('Arial', '', 10)
+        pdf.cell(40, line_height, data.get('invoiceNumber', 'N/A'), 1, 1, 'R', 0)
+        
+        pdf.set_x(110)
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(40, line_height, 'DATE:', 1, 0, 'L', 1)
+        pdf.set_font('Arial', '', 10)
+        pdf.cell(40, line_height, data.get('invoiceDate', datetime.now().strftime('%Y-%m-%d')), 1, 1, 'R', 0)
+        
+        pdf.set_x(110)
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(40, line_height, 'DUE DATE:', 1, 0, 'L', 1)
+        pdf.set_font('Arial', 'B', 10) # BOLD for due date
+        pdf.cell(40, line_height, data.get('dueDate', 'N/A'), 1, 1, 'R', 0)
+        pdf.ln(5)
+        
+        # --- 2. Customer Details (Left) ---
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(col_width, line_height, 'BILL TO:', 'T', 1, 'L', 0)
+        
+        pdf.set_font('Arial', 'B', 12)
+        pdf.cell(0, line_height, data.get('customerName', 'N/A'), 0, 1, 'L', 0)
+        pdf.set_font('Arial', '', 10)
+        pdf.multi_cell(col_width, line_height, data.get('customerAddress', 'N/A'), 0, 'L', 0)
+        pdf.cell(0, line_height, data.get('customerPhone', 'N/A'), 0, 1, 'L', 0)
+        pdf.ln(10)
+        
+        # --- 3. Line Items Table ---
+        header = ['QTY', 'DESCRIPTION', 'UNIT PRICE', 'AMOUNT']
+        widths = [15, 105, 35, 35] 
+        
+        pdf.set_fill_color(*HEADER_FILL)
+        pdf.set_font('Arial', 'B', 9)
+        
+        # Table Header
+        for i, h in enumerate(header):
+            align = 'C' if i == 0 else ('R' if i >= 2 else 'L')
+            pdf.cell(widths[i], 8, h, 1, 0, align, 1)
+        pdf.ln()
+
+        # Table Rows
+        pdf.set_font('Arial', '', 9)
+        
+        for item in data.get('items', []):
+            description = item.get('description', '')
+            amount = item.get('amount', 0)
+            
+            # 1. Calculate Row Height
+            x_start = pdf.get_x()
+            y_start = pdf.get_y()
+            
+            pdf.set_xy(x_start + widths[0], y_start) 
+            pdf.multi_cell(widths[1], 5, description, 0, 'L', False, dry_run=True) 
+            row_h = pdf.get_y() - y_start
+            row_h = max(5, row_h) 
+            
+            # Reset cursor position
+            pdf.set_xy(x_start, y_start) 
+            
+            # 2. Draw Cells
+            
+            # QTY
+            pdf.cell(widths[0], row_h, '1', 1, 0, 'C', 0)
+            
+            # DESCRIPTION 
+            pdf.multi_cell(widths[1], row_h, description, 1, 'L', 0, False)
+            
+            # Cursor Repositioning
+            pdf.set_xy(x_start + widths[0] + widths[1], y_start)
+
+            # UNIT PRICE 
+            pdf.cell(widths[2], row_h, '', 1, 0, 'R', 0)
+            
+            # AMOUNT
+            amount_str = f"£{amount:,.2f}"
+            pdf.cell(widths[3], row_h, amount_str, 1, 1, 'R', 0)
+        
+        pdf.ln(5)
+
+        # --- 4. Totals (Right Aligned) ---
+        totals_x_start = 105
+        
+        pdf.set_font('Arial', '', 10)
+        
+        # Subtotal
+        pdf.set_x(totals_x_start)
+        pdf.cell(50, line_height, 'Subtotal:', 0, 0, 'R')
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(40, line_height, f"£{data.get('subTotal', 0):,.2f}", 0, 1, 'R')
+        
+        # VAT Rate / Amount
+        pdf.set_x(totals_x_start)
+        pdf.set_font('Arial', '', 10)
+        vat_label = f"VAT ({data.get('vatRate', 0)}%):"
+        pdf.cell(50, line_height, vat_label, 0, 0, 'R')
+        pdf.set_font('Arial', 'B', 10)
+        pdf.cell(40, line_height, f"£{data.get('vatAmount', 0):,.2f}", 0, 1, 'R')
+        
+        # Total
+        pdf.set_x(totals_x_start)
+        pdf.set_fill_color(*HEADER_FILL)
+        pdf.set_draw_color(*LINE_COLOR)
+        pdf.set_font('Arial', 'B', 12)
+        pdf.cell(50, 8, 'TOTAL DUE:', 'T', 0, 'R', 1)
+        pdf.cell(40, 8, f"£{data.get('totalAmount', 0):,.2f}", 'T', 1, 'R', 1)
+        
+        pdf.ln(10) # 10mm break after totals
+        
+        # --- 5. Bank Details (Bottom Left - AGGRESSIVE FIX) ---
+        
+        # Calculate Y position to avoid footer (297mm height - 35mm margin)
+        Y_LIMIT = 297 - 35
+        y_safe_start = Y_LIMIT - 30 # Start 30mm above the hard limit
+        
+        # If content is currently too low, jump to the safe start position.
+        if pdf.get_y() > y_safe_start: 
+             pdf.set_y(y_safe_start)
+        
+        # Force a new line and move cursor back to the left margin (10mm)
+        # We must use ln() to change Y, and multi_cell below will reset X, but a redundant ln() helps guarantee separation
+        pdf.ln(2) 
+        
+        # 1. Title
+        pdf.set_font('Arial', 'B', 10)
+        # Use set_xy to explicitly start from the left margin (10mm is default margin)
+        pdf.set_xy(10, pdf.get_y()) 
+        pdf.multi_cell(col_width, 5, 'Payment by Bank Transfer:', 0, 'L')
+        
+        # 2. Account Details
+        pdf.set_font('Arial', '', 10)
+        # Use set_xy to explicitly start from the left margin again
+        pdf.set_xy(10, pdf.get_y()) 
+        pdf.multi_cell(col_width, 5, 'Acc Name: Aztec Interiors Leicester LTD | Bank: HSBC\nSort Code: 40-28-06 | Acc No: 43820343', 0, 'L')
+        
+        # 3. Final Reference Line (The problematic line)
+        pdf.set_font('Arial', 'I', 9)
+        # Use set_xy to explicitly start from the left margin immediately before the call
+        pdf.set_xy(10, pdf.get_y()) 
+        pdf.multi_cell(0, 5, 'Please use your name and/or road name as reference.', 0, 'L')
+
+
+        # --- 6. Return the PDF ---
+        pdf_output = pdf.output(dest='S')
+        pdf_file = BytesIO(pdf_output)
+
+        customer_name = data.get('customerName', 'Customer').replace(' ', '_')
+        filename = f"Invoice_{data.get('invoiceNumber', '0000')}_{customer_name}.pdf"
+        
+        return send_file(
+            pdf_file,
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=filename
+        )
+
+    except Exception as e:
+        current_app.logger.exception(f"Invoice PDF generation failed: {e}")
+        return jsonify({"error": f"Server failed to generate Invoice PDF: {str(e)}"}), 500
+
+# ------------------------------------------------------------------------
+# ROUTE: INVOICE SAVE (NEWLY ADDED)
+# ------------------------------------------------------------------------
+@form_bp.route('/invoices/save', methods=['POST', 'OPTIONS'])
+def save_invoice():
+    """
+    Saves invoice data as a CustomerFormData entry.
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    try:
+        data = request.get_json(silent=True) or {}
+        customer_id = data.get('customerId')
+        
+        if not customer_id:
+            # If the customer ID is missing, but customerName is provided, you might create a new customer.
+            # For simplicity, we enforce customerId presence, assuming customer records exist.
+            return jsonify({'error': 'Missing customer ID. Cannot save invoice without an associated customer.'}), 400
+            
+        customer = Customer.query.get(customer_id)
+        if not customer:
+            return jsonify({'error': 'Customer not found, cannot save invoice'}), 404
+            
+        # Add metadata to the data payload
+        data['form_type'] = f"invoice_{data.get('invoiceNumber', 'general')}"
+        data['is_invoice'] = True
+
+        customer_form_data = CustomerFormData(
+            customer_id=customer_id,
+            form_data=json.dumps(data),
+            token_used=f"INVOICE-{data.get('invoiceNumber', 'N/A')}-{customer_id}-{datetime.utcnow().timestamp()}",
+            submitted_at=datetime.utcnow()
+        )
+        
+        db.session.add(customer_form_data)
+        db.session.commit()
+        
+        current_app.logger.info(f"Invoice saved for customer {customer_id} (Number: {data.get('invoiceNumber')}). ID: {customer_form_data.id}")
+
+        return jsonify({
+            "message": f"Invoice ({data.get('invoiceNumber', 'N/A')}) saved successfully!",
+            "form_submission_id": customer_form_data.id
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception(f"Error saving invoice: {e}")
+        return jsonify({"error": f"Failed to save invoice: {str(e)}"}), 500
+
+
 # ------------------------------------------------------------------------
 # ROUTE: RECEIPT PDF DOWNLOAD
 # ------------------------------------------------------------------------
 @form_bp.route('/receipts/download-pdf', methods=['POST', 'OPTIONS'])
 def download_receipt_pdf():
-    """Generates a PDF receipt based on form data."""
+    """Generates a PDF receipt based on form data (Updated with Gray Theme)."""
     if request.method == 'OPTIONS':
         return jsonify({}), 200
         
@@ -106,19 +357,19 @@ def download_receipt_pdf():
             return jsonify({'error': 'Missing receipt data.'}), 400
 
         pdf = PDF('P', 'mm', 'A4')
+        pdf.doc_title = 'Official Receipt' # Custom property for header
         pdf.alias_nb_pages()
         pdf.add_page()
-        pdf.set_auto_page_break(auto=True, margin=30) # Increased margin for footer
+        pdf.set_auto_page_break(auto=True, margin=30) 
         
-        # --- Header (Title only, company name comes from PDF.header() method) ---
-        pdf.set_font('Arial', 'B', 14)
-        pdf.cell(0, 5, 'OFFICIAL RECEIPT', 0, 1, 'C')
-        pdf.ln(10)
-        
+        # Colors for Gray Theme
+        HEADER_FILL = (230, 230, 230)
+        TOTAL_FILL = (200, 200, 200)
+
         pdf.set_font('Arial', '', 10)
 
         # --- 1. Customer and Date Details ---
-        pdf.set_fill_color(240, 240, 240)
+        pdf.set_fill_color(*HEADER_FILL) # Gray fill
         pdf.set_draw_color(0, 0, 0)
         col_width = 190 / 2
         line_height = 7
@@ -157,7 +408,7 @@ def download_receipt_pdf():
         pdf.ln(5)
 
         # --- 3. Paid Amount (Highlight) ---
-        pdf.set_fill_color(230, 230, 230)
+        pdf.set_fill_color(*TOTAL_FILL) # Darker Gray fill
         pdf.set_font('Arial', 'B', 14)
         
         paid_amount_str = f"£{data.get('paidAmount', 0):,.2f}"
@@ -264,9 +515,11 @@ def save_receipt():
 # REMAINING ORIGINAL ROUTES (Checklist PDF, Checklist Save, Tokens, Delete)
 # ------------------------------------------------------------------------
 
-@form_bp.route('/checklists/download-pdf', methods=['POST'])
+@form_bp.route('/checklists/download-pdf', methods=['POST', 'OPTIONS'])
 def download_checklist_pdf():
-    """Generates PDF on the server using fpdf2."""
+    """Generates PDF on the server using fpdf2 (Updated with Gray Theme)."""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
     try:
         data = request.get_json(silent=True) or {}
         
@@ -274,13 +527,18 @@ def download_checklist_pdf():
             return jsonify({'error': 'Missing form data for PDF generation.'}), 400
 
         pdf = PDF('P', 'mm', 'A4')
+        pdf.doc_title = 'Remedial Checklist' # Custom property for header
         pdf.alias_nb_pages()
         pdf.add_page()
         pdf.set_auto_page_break(auto=True, margin=15)
         pdf.set_font('Arial', '', 10)
+        
+        # Colors for Gray Theme
+        HEADER_FILL_LIGHT = (230, 230, 230)
+        HEADER_FILL_DARK = (200, 200, 200)
 
         # --- 1. Customer and Fitter Details ---
-        pdf.set_fill_color(240, 240, 240)
+        pdf.set_fill_color(*HEADER_FILL_LIGHT)
         pdf.set_draw_color(0, 0, 0)
         col_width = 190 / 2
         line_height = 6
@@ -293,7 +551,16 @@ def download_checklist_pdf():
         pdf.set_font('Arial', 'B', 10)
         pdf.cell(col_width, line_height, 'CUSTOMER ADDRESS:', 1, 0, 'L', 1)
         pdf.set_font('Arial', '', 10)
-        pdf.multi_cell(col_width, line_height, data.get('customerAddress', 'N/A'), 1, 'L', 0)
+        # Multi-cell requires moving cursor after
+        start_x = pdf.get_x()
+        start_y = pdf.get_y()
+        pdf.multi_cell(col_width, line_height, data.get('customerAddress', 'N/A'), 'LRT', 'L', 0)
+        end_y = pdf.get_y()
+        
+        # Draw the bottom border for the first cell if the address wraps
+        pdf.set_xy(10, end_y - line_height)
+        pdf.cell(col_width, line_height, '', 'B', 0, 'L')
+        pdf.set_y(end_y) # Reset y position
 
         pdf.set_font('Arial', 'B', 10)
         pdf.cell(col_width, line_height, 'CUSTOMER TEL NO.:', 1, 0, 'L', 1)
@@ -321,7 +588,7 @@ def download_checklist_pdf():
         header = ['NO', 'ITEM', 'REMEDIAL ACTION', 'COLOUR', 'SIZE', 'QTY']
         widths = [10, 50, 60, 25, 25, 20]
         
-        pdf.set_fill_color(200, 220, 255)
+        pdf.set_fill_color(*HEADER_FILL_DARK) # Darker Gray for table header
         pdf.set_font('Arial', 'B', 9)
         
         for i, h in enumerate(header):
@@ -347,7 +614,7 @@ def download_checklist_pdf():
             
             max_height = 5
             
-            # Start multi_cell processing
+            # Start multi_cell processing to determine row height
             x_start = pdf.get_x()
             y_start = pdf.get_y()
 
@@ -371,13 +638,21 @@ def download_checklist_pdf():
                 if i in [1, 2]: # Item and Remedial Action
                     x = pdf.get_x()
                     y = pdf.get_y()
-                    pdf.multi_cell(widths[i], row_h, txt, 1, 'L', 0, False)
+                    # Draw border only for multi-cell columns
+                    pdf.cell(widths[i], row_h, '', 1, 0, align, 0)
                     pdf.set_xy(x + widths[i], y) # Move cursor right
                 else:
                     # Other columns (NO, COLOUR, SIZE, QTY)
                     pdf.cell(widths[i], row_h, txt, 1, 0, align, 0)
             
-            pdf.ln(row_h)
+            # Re-write the multi-line text into the bordered cell
+            pdf.set_xy(x_start + widths[0], y_start)
+            pdf.multi_cell(widths[1], 4, row_data[1], 0, 'L', 0, False)
+            
+            pdf.set_xy(x_start + widths[0] + widths[1], y_start)
+            pdf.multi_cell(widths[2], 4, row_data[2], 0, 'L', 0, False)
+
+            pdf.set_y(y_start + row_h) # Move cursor for next row
         
         # --- 3. Return the PDF ---
         pdf_output = pdf.output(dest='S')
