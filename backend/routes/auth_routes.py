@@ -1,4 +1,3 @@
-# routes/auth_routes.py
 from flask import Blueprint, request, jsonify, current_app
 from database import db
 from models import User, LoginAttempt, Session
@@ -9,7 +8,7 @@ import re
 
 auth_bp = Blueprint('auth', __name__)
 
-# --- Configuration and Helpers (Unchanged) ---
+# --- Configuration and Helpers (Refactored log_login_attempt) ---
 
 def get_client_ip():
     """Get client IP address"""
@@ -48,16 +47,20 @@ def check_rate_limit(email, max_attempts=5, window_minutes=15):
     return recent_attempts < max_attempts
 
 def log_login_attempt(email, ip_address, success):
-    """Log login attempt"""
+    """
+    Log login attempt.
+    CRITICAL CHANGE: This function no longer commits, ensuring it can be used 
+    within larger transactions (like /login and /register) without causing deadlocks.
+    """
     attempt = LoginAttempt(
         email=email,
         ip_address=ip_address,
         success=success
     )
     db.session.add(attempt)
-    db.session.commit()
+    # db.session.commit() # REMOVED: Commit must happen in the main route function
 
-# --- Decorators (Updated) ---
+# --- Decorators (Unchanged) ---
 
 def token_required(f):
     """Decorator to require authentication"""
@@ -109,7 +112,7 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated
 
-# --- Routes (Updated) ---
+# --- Routes (Updated Commit Logic) ---
 
 @auth_bp.route('/auth/register', methods=['POST'])
 def register():
@@ -139,7 +142,6 @@ def register():
             return jsonify({'error': message}), 400
 
         # Validate role against allowed values
-        # UPDATED: Replaced old roles with the new set based on the frontend
         ALLOWED_ROLES = ['Manager', 'HR', 'Sales', 'Production', 'Staff'] 
         if role not in ALLOWED_ROLES:
             return jsonify({'error': f'Invalid role: must be one of {ALLOWED_ROLES}'}), 400
@@ -160,10 +162,13 @@ def register():
         user.generate_verification_token()
 
         db.session.add(user)
-        db.session.commit()
+        # Note: We do NOT commit here. We commit only once at the very end.
 
-        # Log successful registration
+        # Log successful registration attempt (now relies on final commit)
         log_login_attempt(email, get_client_ip(), True)
+        
+        # FINAL COMMIT: Commit user creation AND login attempt record together
+        db.session.commit()
 
         return jsonify({
             'message': 'User registered successfully',
@@ -176,7 +181,7 @@ def register():
 
 @auth_bp.route('/auth/login', methods=['POST'])
 def login():
-    """Login user (Unchanged)"""
+    """Login user"""
     try:
         data = request.get_json()
         
@@ -195,11 +200,15 @@ def login():
         user = User.query.filter_by(email=email).first()
         
         if not user or not user.check_password(password):
+            # Log failed attempt and commit immediately (as there is no larger transaction)
             log_login_attempt(email, ip_address, False)
+            db.session.commit() # Commit failure log now
             return jsonify({'error': 'Invalid email or password'}), 401
         
         if not user.is_active:
             return jsonify({'error': 'Account is disabled'}), 401
+        
+        # --- Successful Login Transaction ---
         
         # Update last login
         user.last_login = datetime.utcnow()
@@ -217,9 +226,10 @@ def login():
         )
         db.session.add(session)
         
-        # Log successful login
+        # Log successful login (now relies on final commit)
         log_login_attempt(email, ip_address, True)
         
+        # FINAL COMMIT: Commit last_login, new session, and successful login attempt together
         db.session.commit()
         
         return jsonify({
@@ -235,7 +245,7 @@ def login():
 @auth_bp.route('/auth/logout', methods=['POST'])
 @token_required
 def logout():
-    """Logout user (Unchanged)"""
+    """Logout user"""
     try:
         # Get token from header
         token = request.headers.get('Authorization').split(" ")[1]
@@ -254,7 +264,7 @@ def logout():
 @auth_bp.route('/auth/me', methods=['GET'])
 @token_required
 def get_current_user():
-    """Get current user information (Unchanged)"""
+    """Get current user information"""
     try:
         return jsonify({
             'user': request.current_user.to_dict()
@@ -265,7 +275,7 @@ def get_current_user():
 @auth_bp.route('/auth/refresh', methods=['POST'])
 @token_required
 def refresh_token():
-    """Refresh JWT token (Unchanged)"""
+    """Refresh JWT token"""
     try:
         user = request.current_user
         new_token = user.generate_jwt_token(current_app.config['SECRET_KEY'])
@@ -289,7 +299,7 @@ def refresh_token():
 
 @auth_bp.route('/auth/forgot-password', methods=['POST'])
 def forgot_password():
-    """Request password reset (Unchanged)"""
+    """Request password reset"""
     try:
         data = request.get_json()
         
@@ -318,7 +328,7 @@ def forgot_password():
 
 @auth_bp.route('/auth/reset-password', methods=['POST'])
 def reset_password():
-    """Reset password with token (Unchanged)"""
+    """Reset password with token"""
     try:
         data = request.get_json()
         
@@ -360,7 +370,7 @@ def reset_password():
 @auth_bp.route('/auth/change-password', methods=['POST'])
 @token_required
 def change_password():
-    """Change password for authenticated user (Unchanged)"""
+    """Change password for authenticated user"""
     try:
         data = request.get_json()
         
