@@ -1,6 +1,3 @@
-# Create a new file: database.py
-# This will hold the database instance to avoid circular imports
-
 from flask_sqlalchemy import SQLAlchemy
 
 db = SQLAlchemy()

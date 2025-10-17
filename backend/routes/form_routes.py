@@ -1,12 +1,14 @@
 import os
 from flask import Blueprint, request, jsonify, current_app, send_file
-from models import db, Customer, CustomerFormData # Assumes models are correct
+from models import db, Customer, CustomerFormData, User, ApprovalNotification
 import secrets
 import string
 import json
 from datetime import datetime, timedelta
 from io import BytesIO
 from fpdf import FPDF
+from db import get_db_connection
+from functools import wraps
 
 form_bp = Blueprint("form", __name__)
 
@@ -17,56 +19,84 @@ def generate_secure_token(length=32):
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
+# Token authentication decorator
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        # Allow OPTIONS requests without authentication
+        if request.method == 'OPTIONS':
+            return f(*args, **kwargs)
+        
+        token = None
+        
+        if 'Authorization' in request.headers:
+            auth_header = request.headers['Authorization']
+            try:
+                token = auth_header.split(" ")[1]
+            except IndexError:
+                return jsonify({'error': 'Invalid token format'}), 401
+        
+        if not token:
+            return jsonify({'error': 'Token is missing'}), 401
+        
+        try:
+            current_user = User.verify_jwt_token(token, current_app.config['SECRET_KEY'])
+            if not current_user:
+                return jsonify({'error': 'Token is invalid or expired'}), 401
+            
+            request.current_user = current_user
+            
+        except Exception as e:
+            return jsonify({'error': 'Token verification failed'}), 401
+        
+        return f(*args, **kwargs)
+    
+    return decorated
+
+# Manager-only decorator
+def manager_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not hasattr(request, 'current_user'):
+            return jsonify({'error': 'Authentication required'}), 401
+        
+        if request.current_user.role not in ['Manager', 'HR']:
+            return jsonify({'error': 'Manager or HR access required'}), 403
+        
+        return f(*args, **kwargs)
+    
+    return decorated
+
 # ------------------------------------------------------------------------
 # PDF GENERATION HELPERS (Using fpdf2)
 # ------------------------------------------------------------------------
 
 class PDF(FPDF):
     def header(self):
-        # NOTE: Using a static path is risky. In a production Flask app,
-        # you'd use a path relative to the app root, e.g., os.path.join(current_app.root_path, 'static', 'images', 'logo.png')
         logo_path = r"C:\Users\ayaan\Techmynt Solutions\aztec-interior\public\images\logo.png"
         logo_width = 18
-        text_margin_x = 3  # Space between logo and text
-        
-        # Approximate width of the text
+        text_margin_x = 3
         text_block_width = 50 
-        
-        # Total combined width
         combined_width = logo_width + text_margin_x + text_block_width 
-        
-        # Calculate X position for centering
-        page_width = 210  # A4 width in mm
+        page_width = 210
         x_start_centered = (page_width - combined_width) / 2
-        
         y_start = 8 
         logo_height_used = 20
         content_after_header_y = y_start + logo_height_used + 5
 
         if os.path.exists(logo_path):
             try:
-                # Place the logo
                 self.image(logo_path, x=x_start_centered, y=y_start, w=logo_width)
-                
-                # Calculate text starting position
                 text_x_start = x_start_centered + logo_width + text_margin_x
-                
-                # Company Name - use cell instead of multi_cell
-                self.set_xy(text_x_start, y_start + 2)  # +2 for slight vertical adjustment
+                self.set_xy(text_x_start, y_start + 2)
                 self.set_font('Arial', 'B', 16)
                 self.cell(text_block_width, 7, 'AZTEC INTERIORS', 0, 0, 'L')
-                
-                # Document Title (will be set dynamically by routes or default to RECEIPT)
                 title = getattr(self, 'doc_title', 'DOCUMENT')
-                self.set_xy(text_x_start, y_start + 10)  # Position below company name
+                self.set_xy(text_x_start, y_start + 10)
                 self.set_font('Arial', '', 12)
                 self.cell(text_block_width, 5, title.upper(), 0, 0, 'L')
-                
-                # Set cursor for body content
                 self.set_y(content_after_header_y)
-                
             except Exception as e:
-                # Fallback if image fails
                 self.set_y(y_start)
                 self.set_font('Arial', 'B', 16)
                 self.cell(0, 10, 'AZTEC INTERIORS', 0, 1, 'C')
@@ -74,7 +104,6 @@ class PDF(FPDF):
                 self.cell(0, 5, 'DOCUMENT', 0, 1, 'C')
                 self.ln(5)
         else:
-            # Fallback if logo not found
             self.set_y(y_start)
             self.set_font('Arial', 'B', 16)
             self.cell(0, 10, 'AZTEC INTERIORS', 0, 1, 'C')
@@ -95,9 +124,173 @@ class PDF(FPDF):
         self.cell(0, 5, f'Page {self.page_no()}/{{nb}}', 0, 0, 'C')
 
 # ------------------------------------------------------------------------
-# ROUTE: INVOICE PDF DOWNLOAD
+# APPROVAL SYSTEM ROUTES
+# ------------------------------------------------------------------------
+
+@form_bp.route('/approvals/pending', methods=['GET', 'OPTIONS'])
+@token_required
+@manager_required
+def get_pending_approvals():
+    """Get all pending approvals (for managers)"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
+    try:
+        pending_submissions = CustomerFormData.query.filter_by(
+            approval_status='pending'
+        ).order_by(CustomerFormData.submitted_at.desc()).all()
+        
+        all_pending = []
+        
+        for submission in pending_submissions:
+            form_data = json.loads(submission.form_data)
+            creator = User.query.get(submission.created_by) if hasattr(submission, 'created_by') else None
+            customer = Customer.query.get(submission.customer_id)
+            
+            doc_type = 'form'
+            if form_data.get('is_invoice'):
+                doc_type = 'invoice'
+            elif form_data.get('is_receipt'):
+                doc_type = 'receipt'
+            elif form_data.get('form_type') in ['kitchen', 'bedroom']:
+                doc_type = 'checklist'
+            
+            pending_item = {
+                'id': submission.id,
+                'type': doc_type,
+                'invoice_number': form_data.get('invoiceNumber'),
+                'receipt_number': form_data.get('receiptType'),
+                'customer_name': customer.name if customer else form_data.get('customerName', 'N/A'),
+                'total_amount': form_data.get('totalAmount') or form_data.get('paidAmount'),
+                'created_by': creator.get_full_name() if creator else 'Unknown',
+                'created_at': submission.submitted_at.isoformat()
+            }
+            all_pending.append(pending_item)
+        
+        return jsonify({'success': True, 'data': all_pending}), 200
+        
+    except Exception as e:
+        current_app.logger.exception(f"Error fetching pending approvals: {e}")
+        return jsonify({'error': 'Failed to fetch pending approvals'}), 500
+
+@form_bp.route('/approvals/approve', methods=['POST', 'OPTIONS'])
+@token_required
+@manager_required
+def approve_document():
+    """Approve a document"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
+    try:
+        data = request.get_json()
+        document_id = data.get('documentId')
+        
+        if not document_id:
+            return jsonify({'error': 'Missing document ID'}), 400
+        
+        submission = CustomerFormData.query.get(document_id)
+        if not submission:
+            return jsonify({'error': 'Document not found'}), 404
+        
+        submission.approval_status = 'approved'
+        submission.approved_by = request.current_user.id
+        submission.approval_date = datetime.utcnow()
+        
+        form_data = json.loads(submission.form_data)
+        doc_type = 'document'
+        if form_data.get('is_invoice'):
+            doc_type = 'invoice'
+        elif form_data.get('is_receipt'):
+            doc_type = 'receipt'
+        
+        current_app.logger.info(
+            f"Document {document_id} ({doc_type}) approved by manager {request.current_user.id}"
+        )
+        
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': 'Document approved successfully'}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception(f"Error approving document: {e}")
+        return jsonify({'error': 'Failed to approve document'}), 500
+
+@form_bp.route('/approvals/reject', methods=['POST', 'OPTIONS'])
+@token_required
+@manager_required
+def reject_document():
+    """Reject a document"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
+    try:
+        data = request.get_json()
+        document_id = data.get('documentId')
+        reason = data.get('reason', '')
+        
+        if not document_id:
+            return jsonify({'error': 'Missing document ID'}), 400
+        
+        if not reason.strip():
+            return jsonify({'error': 'Rejection reason is required'}), 400
+        
+        submission = CustomerFormData.query.get(document_id)
+        if not submission:
+            return jsonify({'error': 'Document not found'}), 404
+        
+        submission.approval_status = 'rejected'
+        submission.approved_by = request.current_user.id
+        submission.approval_date = datetime.utcnow()
+        submission.rejection_reason = reason
+        
+        form_data = json.loads(submission.form_data)
+        doc_type = 'document'
+        if form_data.get('is_invoice'):
+            doc_type = 'invoice'
+        elif form_data.get('is_receipt'):
+            doc_type = 'receipt'
+        
+        current_app.logger.info(
+            f"Document {document_id} ({doc_type}) rejected by manager {request.current_user.id}. Reason: {reason}"
+        )
+        
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': 'Document rejected'}), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception(f"Error rejecting document: {e}")
+        return jsonify({'error': 'Failed to reject document'}), 500
+
+@form_bp.route('/approvals/status/<int:document_id>', methods=['GET', 'OPTIONS'])
+@token_required
+def get_approval_status(document_id):
+    """Get approval status for a specific document"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
+    try:
+        submission = CustomerFormData.query.get(document_id)
+        if not submission:
+            return jsonify({'error': 'Document not found'}), 404
+        
+        return jsonify({
+            'approval_status': submission.approval_status,
+            'rejection_reason': submission.rejection_reason,
+            'approval_date': submission.approval_date.isoformat() if submission.approval_date else None
+        }), 200
+        
+    except Exception as e:
+        current_app.logger.exception(f"Error fetching approval status: {e}")
+        return jsonify({'error': 'Failed to fetch approval status'}), 500
+
+# ------------------------------------------------------------------------
+# ROUTE: INVOICE PDF DOWNLOAD (WITH APPROVAL CHECK)
 # ------------------------------------------------------------------------
 @form_bp.route('/invoices/download-pdf', methods=['POST', 'OPTIONS'])
+@token_required
 def download_invoice_pdf():
     """Generates a PDF invoice based on data from the frontend."""
     if request.method == 'OPTIONS':
@@ -109,24 +302,29 @@ def download_invoice_pdf():
         if not data:
             return jsonify({'error': 'Missing invoice data.'}), 400
 
+        # Check approval status
+        submission_id = data.get('submission_id')
+        if submission_id:
+            submission = CustomerFormData.query.get(submission_id)
+            if submission and submission.approval_status != 'approved':
+                return jsonify({
+                    'error': 'This invoice is not yet approved for download',
+                    'status': submission.approval_status
+                }), 403
+
         pdf = PDF('P', 'mm', 'A4')
         pdf.doc_title = 'Invoice'
         pdf.alias_nb_pages()
         pdf.add_page()
-        
-        # Increased margin to prevent footer overlap
         pdf.set_auto_page_break(auto=True, margin=35) 
-        
         pdf.set_font('Arial', '', 10)
         
-        # Colors for Gray Theme
         HEADER_FILL = (230, 230, 230)
         LINE_COLOR = (0, 0, 0)
-        
         col_width = 190 / 2
         line_height = 6
         
-        # --- 1. Invoice Number and Dates (Top Right) ---
+        # Invoice Number and Dates
         pdf.set_x(110)
         pdf.set_fill_color(*HEADER_FILL)
         pdf.set_font('Arial', 'B', 10)
@@ -143,14 +341,13 @@ def download_invoice_pdf():
         pdf.set_x(110)
         pdf.set_font('Arial', 'B', 10)
         pdf.cell(40, line_height, 'DUE DATE:', 1, 0, 'L', 1)
-        pdf.set_font('Arial', 'B', 10) # BOLD for due date
+        pdf.set_font('Arial', 'B', 10)
         pdf.cell(40, line_height, data.get('dueDate', 'N/A'), 1, 1, 'R', 0)
         pdf.ln(5)
         
-        # --- 2. Customer Details (Left) ---
+        # Customer Details
         pdf.set_font('Arial', 'B', 10)
         pdf.cell(col_width, line_height, 'BILL TO:', 'T', 1, 'L', 0)
-        
         pdf.set_font('Arial', 'B', 12)
         pdf.cell(0, line_height, data.get('customerName', 'N/A'), 0, 1, 'L', 0)
         pdf.set_font('Arial', '', 10)
@@ -158,70 +355,45 @@ def download_invoice_pdf():
         pdf.cell(0, line_height, data.get('customerPhone', 'N/A'), 0, 1, 'L', 0)
         pdf.ln(10)
         
-        # --- 3. Line Items Table ---
+        # Line Items Table
         header = ['QTY', 'DESCRIPTION', 'UNIT PRICE', 'AMOUNT']
         widths = [15, 105, 35, 35] 
-        
         pdf.set_fill_color(*HEADER_FILL)
         pdf.set_font('Arial', 'B', 9)
         
-        # Table Header
         for i, h in enumerate(header):
             align = 'C' if i == 0 else ('R' if i >= 2 else 'L')
             pdf.cell(widths[i], 8, h, 1, 0, align, 1)
         pdf.ln()
 
-        # Table Rows
         pdf.set_font('Arial', '', 9)
-        
         for item in data.get('items', []):
             description = item.get('description', '')
             amount = item.get('amount', 0)
-            
-            # 1. Calculate Row Height
             x_start = pdf.get_x()
             y_start = pdf.get_y()
-            
             pdf.set_xy(x_start + widths[0], y_start) 
             pdf.multi_cell(widths[1], 5, description, 0, 'L', False, dry_run=True) 
             row_h = pdf.get_y() - y_start
             row_h = max(5, row_h) 
-            
-            # Reset cursor position
             pdf.set_xy(x_start, y_start) 
-            
-            # 2. Draw Cells
-            
-            # QTY
             pdf.cell(widths[0], row_h, '1', 1, 0, 'C', 0)
-            
-            # DESCRIPTION 
             pdf.multi_cell(widths[1], row_h, description, 1, 'L', 0, False)
-            
-            # Cursor Repositioning
             pdf.set_xy(x_start + widths[0] + widths[1], y_start)
-
-            # UNIT PRICE 
             pdf.cell(widths[2], row_h, '', 1, 0, 'R', 0)
-            
-            # AMOUNT
             amount_str = f"£{amount:,.2f}"
             pdf.cell(widths[3], row_h, amount_str, 1, 1, 'R', 0)
         
         pdf.ln(5)
 
-        # --- 4. Totals (Right Aligned) ---
+        # Totals
         totals_x_start = 105
-        
         pdf.set_font('Arial', '', 10)
-        
-        # Subtotal
         pdf.set_x(totals_x_start)
         pdf.cell(50, line_height, 'Subtotal:', 0, 0, 'R')
         pdf.set_font('Arial', 'B', 10)
         pdf.cell(40, line_height, f"£{data.get('subTotal', 0):,.2f}", 0, 1, 'R')
         
-        # VAT Rate / Amount
         pdf.set_x(totals_x_start)
         pdf.set_font('Arial', '', 10)
         vat_label = f"VAT ({data.get('vatRate', 0)}%):"
@@ -229,75 +401,48 @@ def download_invoice_pdf():
         pdf.set_font('Arial', 'B', 10)
         pdf.cell(40, line_height, f"£{data.get('vatAmount', 0):,.2f}", 0, 1, 'R')
         
-        # Total
         pdf.set_x(totals_x_start)
         pdf.set_fill_color(*HEADER_FILL)
         pdf.set_draw_color(*LINE_COLOR)
         pdf.set_font('Arial', 'B', 12)
         pdf.cell(50, 8, 'TOTAL DUE:', 'T', 0, 'R', 1)
         pdf.cell(40, 8, f"£{data.get('totalAmount', 0):,.2f}", 'T', 1, 'R', 1)
+        pdf.ln(10)
         
-        pdf.ln(10) # 10mm break after totals
-        
-        # --- 5. Bank Details (Bottom Left - AGGRESSIVE FIX) ---
-        
-        # Calculate Y position to avoid footer (297mm height - 35mm margin)
+        # Bank Details
         Y_LIMIT = 297 - 35
-        y_safe_start = Y_LIMIT - 30 # Start 30mm above the hard limit
-        
-        # If content is currently too low, jump to the safe start position.
+        y_safe_start = Y_LIMIT - 30
         if pdf.get_y() > y_safe_start: 
              pdf.set_y(y_safe_start)
-        
-        # Force a new line and move cursor back to the left margin (10mm)
-        # We must use ln() to change Y, and multi_cell below will reset X, but a redundant ln() helps guarantee separation
         pdf.ln(2) 
-        
-        # 1. Title
         pdf.set_font('Arial', 'B', 10)
-        # Use set_xy to explicitly start from the left margin (10mm is default margin)
         pdf.set_xy(10, pdf.get_y()) 
         pdf.multi_cell(col_width, 5, 'Payment by Bank Transfer:', 0, 'L')
-        
-        # 2. Account Details
         pdf.set_font('Arial', '', 10)
-        # Use set_xy to explicitly start from the left margin again
         pdf.set_xy(10, pdf.get_y()) 
         pdf.multi_cell(col_width, 5, 'Acc Name: Aztec Interiors Leicester LTD | Bank: HSBC\nSort Code: 40-28-06 | Acc No: 43820343', 0, 'L')
-        
-        # 3. Final Reference Line (The problematic line)
         pdf.set_font('Arial', 'I', 9)
-        # Use set_xy to explicitly start from the left margin immediately before the call
         pdf.set_xy(10, pdf.get_y()) 
         pdf.multi_cell(0, 5, 'Please use your name and/or road name as reference.', 0, 'L')
 
-
-        # --- 6. Return the PDF ---
         pdf_output = pdf.output(dest='S')
         pdf_file = BytesIO(pdf_output)
-
         customer_name = data.get('customerName', 'Customer').replace(' ', '_')
         filename = f"Invoice_{data.get('invoiceNumber', '0000')}_{customer_name}.pdf"
         
-        return send_file(
-            pdf_file,
-            mimetype='application/pdf',
-            as_attachment=True,
-            download_name=filename
-        )
+        return send_file(pdf_file, mimetype='application/pdf', as_attachment=True, download_name=filename)
 
     except Exception as e:
         current_app.logger.exception(f"Invoice PDF generation failed: {e}")
         return jsonify({"error": f"Server failed to generate Invoice PDF: {str(e)}"}), 500
 
 # ------------------------------------------------------------------------
-# ROUTE: INVOICE SAVE (NEWLY ADDED)
+# ROUTE: INVOICE SAVE (WITH PENDING APPROVAL)
 # ------------------------------------------------------------------------
 @form_bp.route('/invoices/save', methods=['POST', 'OPTIONS'])
+@token_required
 def save_invoice():
-    """
-    Saves invoice data as a CustomerFormData entry.
-    """
+    """Saves invoice data with pending approval status and notifies managers"""
     if request.method == 'OPTIONS':
         return jsonify({}), 200
 
@@ -306,41 +451,76 @@ def save_invoice():
         customer_id = data.get('customerId')
         
         if not customer_id:
-            # If the customer ID is missing, but customerName is provided, you might create a new customer.
-            # For simplicity, we enforce customerId presence, assuming customer records exist.
-            return jsonify({'error': 'Missing customer ID. Cannot save invoice without an associated customer.'}), 400
+            return jsonify({'error': 'Missing customer ID'}), 400
             
         customer = Customer.query.get(customer_id)
         if not customer:
-            return jsonify({'error': 'Customer not found, cannot save invoice'}), 404
+            return jsonify({'error': 'Customer not found'}), 404
             
-        # Add metadata to the data payload
         data['form_type'] = f"invoice_{data.get('invoiceNumber', 'general')}"
         data['is_invoice'] = True
 
+        # Create form submission with pending approval
         customer_form_data = CustomerFormData(
             customer_id=customer_id,
             form_data=json.dumps(data),
             token_used=f"INVOICE-{data.get('invoiceNumber', 'N/A')}-{customer_id}-{datetime.utcnow().timestamp()}",
-            submitted_at=datetime.utcnow()
+            submitted_at=datetime.utcnow(),
+            approval_status='pending',
+            created_by=request.current_user.id
         )
         
         db.session.add(customer_form_data)
-        db.session.commit()
+        db.session.flush()  # Get the ID without committing
         
-        current_app.logger.info(f"Invoice saved for customer {customer_id} (Number: {data.get('invoiceNumber')}). ID: {customer_form_data.id}")
+        # Create approval notification using SQLAlchemy ORM instead of raw SQL
+        try:
+            # Get all managers to notify
+            managers = User.query.filter(
+                User.role.in_(['Manager', 'HR']),
+                User.is_active == True
+            ).all()
+            
+            if not managers:
+                current_app.logger.warning("No active managers found to notify!")
+            
+            # Create notifications for all managers
+            for manager in managers:
+                notification = ApprovalNotification(
+                    user_id=manager.id,
+                    document_type='invoice',
+                    document_id=customer_form_data.id,
+                    status='pending',
+                    message=f'New invoice #{data.get("invoiceNumber", "N/A")} from {request.current_user.get_full_name()} requires approval. Customer: {customer.name}, Amount: £{data.get("totalAmount", 0):,.2f}',
+                    created_at=datetime.utcnow(),
+                    is_read=False
+                )
+                db.session.add(notification)
+            
+            current_app.logger.info(
+                f"Invoice saved for customer {customer_id}. ID: {customer_form_data.id}. "
+                f"Status: pending. Notified {len(managers)} managers."
+            )
+            
+        except Exception as e:
+            current_app.logger.error(f"Error creating approval notifications: {e}")
+            # Continue anyway - invoice was saved even if notifications failed
+        
+        # Commit the main transaction (includes invoice + notifications)
+        db.session.commit()
 
         return jsonify({
-            "message": f"Invoice ({data.get('invoiceNumber', 'N/A')}) saved successfully!",
-            "form_submission_id": customer_form_data.id
+            "success": True,
+            "message": f"Invoice ({data.get('invoiceNumber', 'N/A')}) saved and sent for approval!",
+            "form_submission_id": customer_form_data.id,
+            "approval_status": "pending"
         }), 200
 
     except Exception as e:
         db.session.rollback()
         current_app.logger.exception(f"Error saving invoice: {e}")
         return jsonify({"error": f"Failed to save invoice: {str(e)}"}), 500
-
-
+    
 # ------------------------------------------------------------------------
 # ROUTE: RECEIPT PDF DOWNLOAD
 # ------------------------------------------------------------------------
@@ -357,7 +537,7 @@ def download_receipt_pdf():
             return jsonify({'error': 'Missing receipt data.'}), 400
 
         pdf = PDF('P', 'mm', 'A4')
-        pdf.doc_title = 'Official Receipt' # Custom property for header
+        pdf.doc_title = 'Official Receipt'
         pdf.alias_nb_pages()
         pdf.add_page()
         pdf.set_auto_page_break(auto=True, margin=30) 
@@ -369,7 +549,7 @@ def download_receipt_pdf():
         pdf.set_font('Arial', '', 10)
 
         # --- 1. Customer and Date Details ---
-        pdf.set_fill_color(*HEADER_FILL) # Gray fill
+        pdf.set_fill_color(*HEADER_FILL)
         pdf.set_draw_color(0, 0, 0)
         col_width = 190 / 2
         line_height = 7
@@ -408,7 +588,7 @@ def download_receipt_pdf():
         pdf.ln(5)
 
         # --- 3. Paid Amount (Highlight) ---
-        pdf.set_fill_color(*TOTAL_FILL) # Darker Gray fill
+        pdf.set_fill_color(*TOTAL_FILL)
         pdf.set_font('Arial', 'B', 14)
         
         paid_amount_str = f"£{data.get('paidAmount', 0):,.2f}"
@@ -458,18 +638,17 @@ def download_receipt_pdf():
         )
 
     except Exception as e:
-        current_app.logger.exception(f"Receipt PDF generation failed: {e}")
-        return jsonify({"error": f"Server failed to generate Receipt PDF: {str(e)}"}), 500
+            current_app.logger.exception(f"Receipt PDF generation failed: {e}")
+            return jsonify({"error": f"Server failed to generate Receipt PDF: {str(e)}"}), 500
 
 
 # ------------------------------------------------------------------------
 # ROUTE: RECEIPT SAVE (Saves Receipt Data as a Form Submission)
 # ------------------------------------------------------------------------
 @form_bp.route('/receipts/save', methods=['POST', 'OPTIONS'])
+@token_required
 def save_receipt():
-    """
-    Saves receipt data as a CustomerFormData entry.
-    """
+    """Saves receipt data with pending approval status and notifies managers"""
     if request.method == 'OPTIONS':
         return jsonify({}), 200
 
@@ -484,25 +663,71 @@ def save_receipt():
         if not customer:
             return jsonify({'error': 'Customer not found, cannot save receipt'}), 404
             
-        # Add a unique identifier/type to the data to distinguish it as a receipt
         data['form_type'] = f"receipt_{data.get('receiptType', 'general')}"
         data['is_receipt'] = True
 
+        # Create form submission with pending approval
         customer_form_data = CustomerFormData(
             customer_id=customer_id,
             form_data=json.dumps(data),
             token_used=f"RECEIPT-{data.get('receiptType', '').upper()}-{customer_id}-{datetime.utcnow().timestamp()}",
-            submitted_at=datetime.utcnow()
+            submitted_at=datetime.utcnow(),
+            approval_status='pending',
+            created_by=request.current_user.id
         )
         
         db.session.add(customer_form_data)
-        db.session.commit()
+        db.session.flush()
         
-        current_app.logger.info(f"Receipt saved for customer {customer_id} (Type: {data['receiptType']}). ID: {customer_form_data.id}")
+        # Create approval notification using raw SQL
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            # Get all managers to notify
+            cursor.execute("""
+                SELECT id, email, first_name, last_name 
+                FROM users 
+                WHERE role IN ('Manager', 'HR') AND is_active = 1
+            """)
+            managers = cursor.fetchall()
+            
+            if not managers:
+                current_app.logger.warning("No active managers found to notify!")
+            
+            # Create notifications for all managers
+            notification_count = 0
+            for manager in managers:
+                cursor.execute("""
+                    INSERT INTO approval_notifications 
+                    (user_id, document_type, document_id, status, message, created_at, is_read)
+                    VALUES (?, 'receipt', ?, 'pending', ?, datetime('now'), 0)
+                """, (
+                    manager['id'],
+                    customer_form_data.id,
+                    f'New receipt ({data.get("receiptType", "Payment")}) from {request.current_user.get_full_name()} requires approval. Customer: {customer.name}, Amount: £{data.get("paidAmount", 0):,.2f}'
+                ))
+                notification_count += 1
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            current_app.logger.info(
+                f"Receipt saved for customer {customer_id}. ID: {customer_form_data.id}. "
+                f"Status: pending. Notified {notification_count} managers."
+            )
+            
+        except Exception as e:
+            current_app.logger.error(f"Error creating approval notifications: {e}")
+        
+        db.session.commit()
 
         return jsonify({
-            "message": f"Receipt ({data['receiptType'].title()}) saved successfully!",
-            "form_submission_id": customer_form_data.id
+            "success": True,
+            "message": f"Receipt ({data.get('receiptType', 'Payment').title()}) saved and sent for approval!",
+            "form_submission_id": customer_form_data.id,
+            "approval_status": "pending"
         }), 200
 
     except Exception as e:
@@ -527,7 +752,7 @@ def download_checklist_pdf():
             return jsonify({'error': 'Missing form data for PDF generation.'}), 400
 
         pdf = PDF('P', 'mm', 'A4')
-        pdf.doc_title = 'Remedial Checklist' # Custom property for header
+        pdf.doc_title = 'Remedial Checklist'
         pdf.alias_nb_pages()
         pdf.add_page()
         pdf.set_auto_page_break(auto=True, margin=15)
@@ -551,16 +776,14 @@ def download_checklist_pdf():
         pdf.set_font('Arial', 'B', 10)
         pdf.cell(col_width, line_height, 'CUSTOMER ADDRESS:', 1, 0, 'L', 1)
         pdf.set_font('Arial', '', 10)
-        # Multi-cell requires moving cursor after
         start_x = pdf.get_x()
         start_y = pdf.get_y()
         pdf.multi_cell(col_width, line_height, data.get('customerAddress', 'N/A'), 'LRT', 'L', 0)
         end_y = pdf.get_y()
         
-        # Draw the bottom border for the first cell if the address wraps
         pdf.set_xy(10, end_y - line_height)
         pdf.cell(col_width, line_height, '', 'B', 0, 'L')
-        pdf.set_y(end_y) # Reset y position
+        pdf.set_y(end_y)
 
         pdf.set_font('Arial', 'B', 10)
         pdf.cell(col_width, line_height, 'CUSTOMER TEL NO.:', 1, 0, 'L', 1)
@@ -580,7 +803,6 @@ def download_checklist_pdf():
         pdf.ln(10)
         
         # --- 2. Checklist Items Table ---
-        
         pdf.set_font('Arial', 'B', 10)
         pdf.cell(0, 5, 'Items Required for Remedial Action', 0, 1, 'L')
         pdf.ln(1)
@@ -588,14 +810,13 @@ def download_checklist_pdf():
         header = ['NO', 'ITEM', 'REMEDIAL ACTION', 'COLOUR', 'SIZE', 'QTY']
         widths = [10, 50, 60, 25, 25, 20]
         
-        pdf.set_fill_color(*HEADER_FILL_DARK) # Darker Gray for table header
+        pdf.set_fill_color(*HEADER_FILL_DARK)
         pdf.set_font('Arial', 'B', 9)
         
         for i, h in enumerate(header):
             pdf.cell(widths[i], 7, h, 1, 0, 'C', 1)
         pdf.ln()
 
-        # Table Rows
         pdf.set_font('Arial', '', 9)
         pdf.set_fill_color(255, 255, 255)
         
@@ -614,47 +835,39 @@ def download_checklist_pdf():
             
             max_height = 5
             
-            # Start multi_cell processing to determine row height
             x_start = pdf.get_x()
             y_start = pdf.get_y()
 
-            # Item (Multi-line text in column 2)
             pdf.set_xy(x_start + widths[0], y_start)
             pdf.multi_cell(widths[1], 4, row_data[1], 0, 'L', 0, False)
             h_item = pdf.get_y() - y_start
             
-            # Remedial Action (Multi-line text in column 3)
             pdf.set_xy(x_start + widths[0] + widths[1], y_start)
             pdf.multi_cell(widths[2], 4, row_data[2], 0, 'L', 0, False)
             h_action = pdf.get_y() - y_start
 
             row_h = max(max_height, h_item, h_action)
-            pdf.set_xy(x_start, y_start) # Reset position for drawing cells
+            pdf.set_xy(x_start, y_start)
 
-            # Draw cells based on calculated height
             for i, txt in enumerate(row_data):
                 align = 'C' if i == 0 or i >= 3 else 'L'
                 
-                if i in [1, 2]: # Item and Remedial Action
+                if i in [1, 2]:
                     x = pdf.get_x()
                     y = pdf.get_y()
-                    # Draw border only for multi-cell columns
                     pdf.cell(widths[i], row_h, '', 1, 0, align, 0)
-                    pdf.set_xy(x + widths[i], y) # Move cursor right
+                    pdf.set_xy(x + widths[i], y)
                 else:
-                    # Other columns (NO, COLOUR, SIZE, QTY)
                     pdf.cell(widths[i], row_h, txt, 1, 0, align, 0)
             
-            # Re-write the multi-line text into the bordered cell
             pdf.set_xy(x_start + widths[0], y_start)
             pdf.multi_cell(widths[1], 4, row_data[1], 0, 'L', 0, False)
             
             pdf.set_xy(x_start + widths[0] + widths[1], y_start)
             pdf.multi_cell(widths[2], 4, row_data[2], 0, 'L', 0, False)
 
-            pdf.set_y(y_start + row_h) # Move cursor for next row
+            pdf.set_y(y_start + row_h)
         
-        # --- 3. Return the PDF ---
         pdf_output = pdf.output(dest='S')
         pdf_file = BytesIO(pdf_output)
 
@@ -673,14 +886,9 @@ def download_checklist_pdf():
         current_app.logger.exception(f"PDF generation failed on server (fpdf2): {e}")
         return jsonify({"error": f"Server failed to generate PDF: {str(e)}"}), 500
 
-# ========================================================================
-# ROUTE: CHECKLIST SAVE (Internal Staff Forms)
-# ========================================================================
 @form_bp.route('/checklists/save', methods=['POST', 'OPTIONS'])
 def save_checklist():
-    """
-    Handles POST requests to save internal staff checklists (e.g., Remedial Action Checklist).
-    """
+    """Handles POST requests to save internal staff checklists."""
     if request.method == 'OPTIONS':
         return jsonify({}), 200
 
@@ -723,7 +931,6 @@ def generate_customer_form_link(customer_id):
         return jsonify({}), 200
 
     try:
-        # Verify customer exists
         customer = Customer.query.get(customer_id)
         if not customer:
             return jsonify({
@@ -732,12 +939,11 @@ def generate_customer_form_link(customer_id):
             }), 404
 
         data = request.get_json(silent=True) or {}
-        form_type = data.get('formType', 'bedroom') # bedroom or kitchen
+        form_type = data.get('formType', 'bedroom')
 
         token = generate_secure_token()
         expiration = datetime.now() + timedelta(hours=24)
         
-        # Store token with customer association
         form_tokens[token] = {
             'customer_id': customer_id,
             'form_type': form_type,
@@ -809,7 +1015,6 @@ def submit_customer_form():
 
         customer_id = None
         
-        # Try token-based submission first (for existing customers)
         if token:
             current_app.logger.debug(f"Processing token-based submission with token: {token}")
             
@@ -818,39 +1023,31 @@ def submit_customer_form():
 
             token_data = form_tokens[token]
             
-            # Check expiration
             if datetime.now() > token_data['expires_at']:
                 del form_tokens[token]
                 return jsonify({'success': False, 'error': 'Token has expired'}), 410
                 
-            # Check if already used
             if token_data['used']:
                 return jsonify({'success': False, 'error': 'Token has already been used'}), 410
 
             customer_id = token_data.get('customer_id')
             
-            # Verify customer exists
             if customer_id:
                 customer = Customer.query.get(customer_id)
                 if not customer:
                     return jsonify({'success': False, 'error': 'Associated customer not found'}), 404
                 
-                # Mark token as used
                 form_tokens[token]['used'] = True
                 current_app.logger.info(f"Token {token} marked as used for customer {customer_id}")
         
-        # If no valid token or customer_id from token, try alternative methods
         if not customer_id:
-            # Check if customer_id is provided directly in form data or URL params
             customer_id = form_data.get('customer_id') or request.args.get('customerId')
             
             if customer_id:
-                # Verify this customer exists
                 customer = Customer.query.get(customer_id)
                 if not customer:
                     return jsonify({'success': False, 'error': 'Specified customer not found'}), 404
             else:
-                # Fallback: create new customer from form data (legacy behavior)
                 customer_name = (form_data.get('customer_name') or '').strip()
                 customer_address = (form_data.get('customer_address') or '').strip()
                 
@@ -868,11 +1065,10 @@ def submit_customer_form():
                     created_by='Form Submission'
                 )
                 db.session.add(customer)
-                db.session.flush() # Get the ID without committing
+                db.session.flush()
                 customer_id = customer.id
                 current_app.logger.info(f"Created new customer {customer_id} from form submission")
 
-        # Create ONLY ONE form submission record
         try:
             customer_form_data = CustomerFormData(
                 customer_id=customer_id,
@@ -883,7 +1079,6 @@ def submit_customer_form():
             db.session.add(customer_form_data)
             db.session.commit()
             
-            # Get customer name for response
             final_customer = Customer.query.get(customer_id)
             customer_name = final_customer.name if final_customer else 'Customer'
             
@@ -906,7 +1101,6 @@ def submit_customer_form():
         db.session.rollback()
         return jsonify({'success': False, 'error': f'Form submission failed: {str(e)}'}), 500
 
-# Legacy endpoint for backward compatibility
 @form_bp.route('/generate-form-link', methods=['POST', 'OPTIONS'])
 def generate_form_link():
     """Legacy endpoint - generates token not tied to specific customer"""
@@ -956,9 +1150,6 @@ def cleanup_expired_tokens():
         current_app.logger.exception("Cleanup failed")
         return jsonify({'success': False, 'error': f'Cleanup failed: {str(e)}'}), 500
 
-# ========================================================================
-# ROUTE: DELETE FORM SUBMISSION
-# ========================================================================
 @form_bp.route('/form-submissions/<int:submission_id>', methods=['DELETE', 'OPTIONS'])
 def delete_form_submission(submission_id):
     """Delete a form submission by ID"""
