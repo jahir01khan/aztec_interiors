@@ -271,6 +271,19 @@ def get_current_user():
         }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    
+@auth_bp.route('/auth/users/staff', methods=['GET'])
+@admin_required
+def get_staff_users():
+    """Get all staff users (Manager/HR only)"""
+    try:
+        staff_roles = ['Sales', 'Production']
+        staff_users = User.query.filter(User.role.in_(staff_roles)).order_by(User.first_name).all()
+        return jsonify({
+            'users': [user.to_dict() for user in staff_users]
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @auth_bp.route('/auth/refresh', methods=['POST'])
 @token_required

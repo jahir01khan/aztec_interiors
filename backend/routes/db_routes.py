@@ -1,15 +1,29 @@
 
-from flask import Blueprint, request, jsonify
-from database import db
-from models import Assignment, Customer, CustomerFormData, Fitter, Job, Quotation, QuotationItem
+from flask import Blueprint, request, jsonify, send_file
 import json
+from functools import wraps
+from database import db
+from models import User, Assignment, Customer, CustomerFormData, Fitter, Job, ProductionNotification, Quotation, QuotationItem
 from datetime import datetime
+import io
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.units import inch
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
 
 # Create blueprint
+from .auth_helpers import token_required
 db_bp = Blueprint('database', __name__)
 
+
 @db_bp.route('/customers', methods=['GET', 'POST'])
+@token_required
 def handle_customers():
+    if request.method == 'OPTIONS': # Handle OPTIONS
+        return jsonify({}), 200
+    
     if request.method == 'POST':
         data = request.json
         
@@ -25,7 +39,7 @@ def handle_customers():
             marketing_opt_in=data.get('marketing_opt_in', False),
             notes=data.get('notes', ''),
             stage=data.get('stage', 'Lead'),  # ENSURE DEFAULT IS Lead
-            created_by=data.get('created_by', 'System'),
+            created_by=request.current_user.email if hasattr(request, 'current_user') else data.get('created_by', 'System'),
             status=data.get('status', 'Active'),
             project_types=data.get('project_types', []),
             salesperson=data.get('salesperson'),
@@ -63,8 +77,12 @@ def handle_customers():
         for c in customers
     ])
 
-@db_bp.route('/customers/<string:customer_id>', methods=['GET', 'PUT', 'DELETE'])
+@db_bp.route('/customers/<string:customer_id>', methods=['GET', 'PUT', 'DELETE', 'OPTIONS'])
+@token_required
 def handle_single_customer(customer_id):
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
     customer = Customer.query.get_or_404(customer_id)
     
     if request.method == 'GET':
@@ -121,7 +139,7 @@ def handle_single_customer(customer_id):
         customer.status = data.get('status', customer.status)
         customer.stage = data.get('stage', customer.stage)
         customer.notes = data.get('notes', customer.notes)
-        customer.updated_by = data.get('updated_by', 'System')
+        customer.updated_by = request.current_user.email if hasattr(request, 'current_user') else data.get('updated_by', 'System')
         customer.salesperson = data.get('salesperson', customer.salesperson)
         customer.project_types = data.get('project_types', customer.project_types)
         
@@ -154,59 +172,140 @@ def sync_customer_stage(customer_id):
     })
 
 # Keep existing quotation routes unchanged
-@db_bp.route('/quotations', methods=['GET', 'POST'])
+@db_bp.route('/quotations', methods=['GET', 'POST', 'OPTIONS'])
+@token_required  # ADD THIS DECORATOR
 def handle_quotations():
+    """
+    GET: Retrieve quotations (optionally filtered by customer_id)
+    POST: Create a new quotation with items
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
     if request.method == 'POST':
-        data = request.json
-        quotation = Quotation(
-            customer_id=data['customer_id'],
-            total=data['total'],
-            notes=data.get('notes')
-        )
-        db.session.add(quotation)
-        db.session.flush()
-
-        for item in data.get('items', []):
-            q_item = QuotationItem(
-                quotation_id=quotation.id,
-                item=item['item'],
-                description=item.get('description'),
-                color=item.get('color'),
-                amount=item['amount']
+        try:
+            data = request.json
+            print(f"[QUOTATION POST] Received data: {json.dumps(data, indent=2)}")  # Debug log
+            
+            # Validate required fields
+            if 'customer_id' not in data:
+                return jsonify({'error': 'customer_id is required'}), 400
+            if 'total' not in data:
+                return jsonify({'error': 'total is required'}), 400
+            
+            # Convert customer_id to string if it's an integer (UUID format expected)
+            customer_id = str(data['customer_id'])
+            
+            # Verify customer exists
+            customer = Customer.query.get(customer_id)
+            if not customer:
+                return jsonify({'error': f'Customer with id {customer_id} not found'}), 404
+            
+            print(f"[QUOTATION POST] Creating quotation for customer: {customer.name} (ID: {customer_id})")
+            
+            # Get user role for auto-approval logic
+            user = getattr(request, 'current_user', None)
+            is_manager = user and user.role == 'Manager'
+            auto_approve = data.get('auto_approve', False) or is_manager
+            
+            # Create quotation
+            quotation = Quotation(
+                customer_id=customer_id,
+                total=float(data['total']),
+                notes=data.get('notes', ''),
+                status='Approved' if auto_approve else 'Draft'
             )
-            db.session.add(q_item)
-
-        db.session.commit()
-        return jsonify({'id': quotation.id}), 201
-
+            
+            db.session.add(quotation)
+            db.session.flush()  # Get the quotation.id
+            
+            print(f"[QUOTATION POST] Created quotation ID: {quotation.id}")
+            
+            # Add items
+            items_created = 0
+            for item_data in data.get('items', []):
+                q_item = QuotationItem(
+                    quotation_id=quotation.id,
+                    item=item_data.get('item', ''),
+                    description=item_data.get('description', ''),
+                    color=item_data.get('color', ''),
+                    amount=float(item_data.get('amount', 0))
+                )
+                db.session.add(q_item)
+                items_created += 1
+            
+            print(f"[QUOTATION POST] Created {items_created} items")
+            
+            # Commit everything
+            db.session.commit()
+            
+            print(f"[QUOTATION POST] Successfully saved quotation {quotation.id} for customer {customer_id}")
+            
+            # Return response
+            return jsonify({
+                'quotation_id': quotation.id,
+                'id': quotation.id,
+                'customer_id': customer_id,
+                'total': float(quotation.total),
+                'approval_status': 'approved' if auto_approve else 'pending',
+                'message': 'Quotation created successfully'
+            }), 201
+            
+        except KeyError as e:
+            print(f"[QUOTATION POST ERROR] Missing key: {e}")
+            return jsonify({'error': f'Missing required field: {str(e)}'}), 400
+        except Exception as e:
+            db.session.rollback()
+            print(f"[QUOTATION POST ERROR] {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({'error': str(e)}), 500
+    
+    # GET request - retrieve quotations
     customer_id = request.args.get('customer_id', type=str)
+    
+    print(f"[QUOTATION GET] Fetching quotations for customer_id: {customer_id if customer_id else 'ALL'}")
+    
     if customer_id:
-        quotations = Quotation.query.filter_by(customer_id=customer_id).all()
+        quotations = Quotation.query.filter_by(customer_id=customer_id).order_by(Quotation.created_at.desc()).all()
+        print(f"[QUOTATION GET] Found {len(quotations)} quotations for customer {customer_id}")
     else:
-        quotations = Quotation.query.all()
-        
-    return jsonify([
+        quotations = Quotation.query.order_by(Quotation.created_at.desc()).all()
+        print(f"[QUOTATION GET] Found {len(quotations)} total quotations")
+    
+    result = [
         {
             'id': q.id,
             'customer_id': q.customer_id,
             'customer_name': q.customer.name if q.customer else None,
-            'total': q.total,
+            'total': float(q.total) if q.total else 0,
+            'status': q.status,
             'notes': q.notes,
             'created_at': q.created_at.isoformat() if q.created_at else None,
+            'updated_at': q.updated_at.isoformat() if q.updated_at else None,
             'items': [
                 {
                     'id': i.id,
                     'item': i.item,
                     'description': i.description,
                     'color': i.color,
-                    'amount': i.amount
+                    'amount': float(i.amount) if i.amount else 0
                 } for i in q.items
             ]
         } for q in quotations
-    ])
+    ]
+    
+    print(f"[QUOTATION GET] Returning {len(result)} quotations")
+    return jsonify(result)
 
-@db_bp.route('/quotations/<int:quotation_id>', methods=['GET', 'PUT', 'DELETE'])
+
+@db_bp.route('/quotations/<int:quotation_id>', methods=['GET', 'PUT', 'DELETE', 'OPTIONS'])
+@token_required  # ADD THIS DECORATOR
 def handle_single_quotation(quotation_id):
+    """Handle single quotation operations"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
     quotation = Quotation.query.get_or_404(quotation_id)
 
     if request.method == 'GET':
@@ -214,7 +313,8 @@ def handle_single_quotation(quotation_id):
             'id': quotation.id,
             'customer_id': quotation.customer_id,
             'customer_name': quotation.customer.name if quotation.customer else None,
-            'total': quotation.total,
+            'total': float(quotation.total) if quotation.total else 0,
+            'status': quotation.status,
             'notes': quotation.notes,
             'created_at': quotation.created_at.isoformat() if quotation.created_at else None,
             'updated_at': quotation.updated_at.isoformat() if quotation.updated_at else None,
@@ -224,7 +324,7 @@ def handle_single_quotation(quotation_id):
                     'item': i.item,
                     'description': i.description,
                     'color': i.color,
-                    'amount': i.amount
+                    'amount': float(i.amount) if i.amount else 0
                 } for i in quotation.items
             ]
         })
@@ -233,16 +333,20 @@ def handle_single_quotation(quotation_id):
         data = request.json
         quotation.total = data.get('total', quotation.total)
         quotation.notes = data.get('notes', quotation.notes)
+        quotation.status = data.get('status', quotation.status)
 
         if 'items' in data:
+            # Delete existing items
             QuotationItem.query.filter_by(quotation_id=quotation.id).delete()
-            for item in data['items']:
+            
+            # Add new items
+            for item_data in data['items']:
                 q_item = QuotationItem(
                     quotation_id=quotation.id,
-                    item=item['item'],
-                    description=item.get('description'),
-                    color=item.get('color'),
-                    amount=item['amount']
+                    item=item_data.get('item', ''),
+                    description=item_data.get('description', ''),
+                    color=item_data.get('color', ''),
+                    amount=float(item_data.get('amount', 0))
                 )
                 db.session.add(q_item)
 
@@ -253,11 +357,35 @@ def handle_single_quotation(quotation_id):
         db.session.delete(quotation)
         db.session.commit()
         return jsonify({'message': 'Quotation deleted successfully'})
+
+
+@db_bp.route('/quotations/<int:quotation_id>/pdf', methods=['GET', 'OPTIONS'])
+@token_required
+def get_quotation_pdf(quotation_id):
+    """Generate and return quotation PDF"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
+    try:
+        quotation = Quotation.query.get_or_404(quotation_id)
+        
+        # TODO: Implement PDF generation
+        # For now, return a placeholder response
+        return jsonify({
+            'error': 'PDF generation not yet implemented',
+            'quotation_id': quotation_id
+        }), 501
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
     
 # Additional routes to add to your db_routes.py file
 
-@db_bp.route('/jobs', methods=['GET', 'POST'])
+@db_bp.route('/jobs', methods=['GET', 'POST', 'OPTIONS'])
+@token_required
 def handle_jobs():
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
     if request.method == 'POST':
         data = request.json
         
@@ -334,8 +462,12 @@ def handle_jobs():
         for j in jobs
     ])
 
-@db_bp.route('/jobs/<string:job_id>', methods=['GET', 'PUT', 'DELETE'])
+@db_bp.route('/jobs/<string:job_id>', methods=['GET', 'PUT', 'DELETE', 'OPTIONS'])
+@token_required
 def handle_single_job(job_id):
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
     job = Job.query.get_or_404(job_id)
     
     if request.method == 'GET':
@@ -416,8 +548,11 @@ def handle_single_job(job_id):
         
         return jsonify({'message': 'Job deleted successfully'})
 
-@db_bp.route('/pipeline', methods=['GET'])
+@db_bp.route('/pipeline', methods=['GET', 'OPTIONS'])
+@token_required
 def get_pipeline_data():
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
     """
     Specialized endpoint that returns combined customer/job data optimized for the pipeline view
     """
@@ -583,25 +718,29 @@ def get_active_customers():
         ])
     except Exception as e:
         return jsonify({'error': str(e)}), 400
-@db_bp.route('/customers/<string:customer_id>/stage', methods=['PATCH'])
+    
+@db_bp.route('/customers/<string:customer_id>/stage', methods=['PATCH', 'OPTIONS'])
+@token_required
 def update_customer_stage(customer_id):
     """Update customer stage - optimized endpoint for drag and drop"""
+    if request.method == 'OPTIONS': # Handle OPTIONS
+        return jsonify({}), 200
     try:
         customer = Customer.query.get_or_404(customer_id)
         
         data = request.json
+        updated_by_user = request.current_user.email if hasattr(request, 'current_user') else data.get('updated_by', 'System')
         new_stage = data.get('stage')
         reason = data.get('reason', 'Stage updated via drag and drop')
-        updated_by = data.get('updated_by', 'System')
         
         if not new_stage:
             return jsonify({'error': 'Stage is required'}), 400
         
-        # Valid stages
+        # Valid stages list (ensure 'Accepted' is exactly like this)
         valid_stages = [
-            "Lead", "Quote", "Consultation", "Survey", "Measure", 
-            "Design", "Quoted", "Accepted", "OnHold", "Production", 
-            "Delivery", "Installation", "Complete", "Remedial", "Cancelled"
+            "Lead", "Survey", "Design", "Quote", "Consultation", "Quoted", 
+            "Accepted", "OnHold", "Production", "Delivery", "Installation", 
+            "Complete", "Remedial", "Cancelled" 
         ]
         
         if new_stage not in valid_stages:
@@ -609,8 +748,15 @@ def update_customer_stage(customer_id):
         
         # Update stage
         old_stage = customer.stage
+
+        # --- START OF FIX ---
+        # Only proceed if the stage actually changed
+        if old_stage == new_stage:
+            return jsonify({'message': 'Stage not changed'}), 200
+        # --- END OF FIX ---
+        
         customer.stage = new_stage
-        customer.updated_by = updated_by
+        customer.updated_by = updated_by_user
         customer.updated_at = datetime.utcnow()
         
         # Optional: Add to notes for audit trail
@@ -619,9 +765,41 @@ def update_customer_stage(customer_id):
             customer.notes += note_entry
         else:
             customer.notes = note_entry
+
+        # --- Notification Logic ---
+        notification_to_add = None # Prepare a variable for the notification
+        if new_stage == 'Accepted':
+            current_app.logger.info(f"✅ Stage changed to Accepted for job {customer_id}. Preparing notification.") # Log info
+            notification_to_add = ProductionNotification(
+                job_id=customer.id,  # Use customer ID as job_id for customer-only items
+                customer_id=customer.id,
+                message=f"customer '{customer.name or customer.id}' moved to Accepted",
+                moved_by=updated_by_user 
+            )
+            db.session.add(notification_to_add) # Add notification to the session
+        # --- End Notification Logic ---
+
+        # --- START OF FIX 2 ---
+        # Also update any jobs that are linked to this customer AND are in the same old stage
+        # This is for when a 'customer' card is dragged, and we want its jobs to follow.
+        try:
+            linked_jobs = Job.query.filter_by(customer_id=customer.id, stage=old_stage).all()
+            for job in linked_jobs:
+                job.stage = new_stage
+                job.updated_at = datetime.utcnow()
+                note_entry_job = f"\n[{datetime.utcnow().isoformat()}] Stage synced from {old_stage} to {new_stage} by {updated_by_user}. Reason: Parent customer moved."
+                if job.notes:
+                    job.notes += note_entry_job
+                else:
+                    job.notes = note_entry_job
+                current_app.logger.info(f"🔄 Queued sync for job {job.id} stage to {new_stage}.")
+        except Exception as e:
+            current_app.logger.error(f"⚠️ Error queueing job sync for customer {customer_id}: {e}")
+        # --- END OF FIX 2 ---
         
         # CRITICAL: Commit the changes to the database
         db.session.commit()
+        current_app.logger.info(f"💾 Committed changes for customer {customer_id}. New stage: {new_stage}.")
         
         return jsonify({
             'message': 'Stage updated successfully',
@@ -632,55 +810,99 @@ def update_customer_stage(customer_id):
         
     except Exception as e:
         db.session.rollback()
+        current_app.logger.error(f"Error updating customer stage for {customer_id}: {e}") # Log error
         return jsonify({'error': str(e)}), 500
 
 
-@db_bp.route('/jobs/<string:job_id>/stage', methods=['PATCH'])
+@db_bp.route('/jobs/<string:job_id>/stage', methods=['PATCH', 'OPTIONS'])
+@token_required
 def update_job_stage(job_id):
     """Update job stage - optimized endpoint for drag and drop"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+        
+    job = Job.query.get_or_404(job_id)
+    
+    data = request.json
+    updated_by_user = request.current_user.email if hasattr(request, 'current_user') else data.get('updated_by', 'System')
+    new_stage = data.get('stage')
+    reason = data.get('reason', 'Stage updated via drag and drop')
+    
+    if not new_stage:
+        return jsonify({'error': 'Stage is required'}), 400
+    
+    # Valid stages list (ensure 'Accepted' is exactly like this)
+    valid_stages = [
+        "Lead", "Survey", "Design", "Quote", "Consultation", "Quoted", 
+        "Accepted", "OnHold", "Production", "Delivery", "Installation", 
+        "Complete", "Remedial", "Cancelled" 
+    ]
+    
+    if new_stage not in valid_stages:
+        return jsonify({'error': 'Invalid stage'}), 400
+    
+    old_stage = job.stage
+    
+    # Only proceed if the stage actually changed
+    if old_stage == new_stage:
+        return jsonify({'message': 'Stage not changed'}), 200
+
     try:
-        job = Job.query.get_or_404(job_id)
-        
-        data = request.json
-        new_stage = data.get('stage')
-        reason = data.get('reason', 'Stage updated via drag and drop')
-        updated_by = data.get('updated_by', 'System')
-        
-        if not new_stage:
-            return jsonify({'error': 'Stage is required'}), 400
-        
-        # Valid stages
-        valid_stages = [
-            "Lead", "Quote", "Consultation", "Survey", "Measure", 
-            "Design", "Quoted", "Accepted", "OnHold", "Production", 
-            "Delivery", "Installation", "Complete", "Remedial", "Cancelled"
-        ]
-        
-        if new_stage not in valid_stages:
-            return jsonify({'error': 'Invalid stage'}), 400
-        
         # Update stage
-        old_stage = job.stage
         job.stage = new_stage
         job.updated_at = datetime.utcnow()
         
-        # Optional: Add to notes for audit trail
-        note_entry = f"\n[{datetime.utcnow().isoformat()}] Stage changed from {old_stage} to {new_stage}. Reason: {reason}"
+        # Add to notes for audit trail
+        note_entry = f"\n[{datetime.utcnow().isoformat()}] Stage changed from {old_stage} to {new_stage} by {updated_by_user}. Reason: {reason}"
         if job.notes:
             job.notes += note_entry
         else:
             job.notes = note_entry
         
-        # CRITICAL: Commit the changes to the database
-        db.session.commit()
+        # --- Notification Logic ---
+        notification_to_add = None # Prepare a variable for the notification
+        if new_stage == 'Accepted':
+            current_app.logger.info(f"✅ Stage changed to Accepted for job {job_id}. Preparing notification.") # Log info
+            notification_to_add = ProductionNotification(
+                job_id=job.id,
+                customer_id=job.customer_id,
+                message=f"Job '{job.job_name or job.job_reference or job.id}' moved to Accepted",
+                moved_by=updated_by_user 
+            )
+            db.session.add(notification_to_add) # Add notification to the session
+        # --- End Notification Logic ---
         
+        # --- START OF FIX ---
+        # ALSO update the parent customer's stage to keep them in sync.
+        try:
+            customer = Customer.query.get(job.customer_id)
+            if customer and customer.stage != new_stage:
+                customer.stage = new_stage
+                customer.updated_at = datetime.utcnow()
+                note_entry_cust = f"\n[{datetime.utcnow().isoformat()}] Stage synced from {old_stage} to {new_stage} by {updated_by_user}. Reason: Linked job moved."
+                if customer.notes:
+                    customer.notes += note_entry_cust
+                else:
+                    customer.notes = note_entry_cust
+                current_app.logger.info(f"🔄 Queued sync for customer {customer.id} stage to {new_stage}.")
+        except Exception as e:
+            # Log this error, but don't fail the whole request
+            current_app.logger.error(f"⚠️ Error queueing customer stage sync for job {job_id}: {e}")
+        # --- END OF FIX ---
+
+
+        # Commit ALL changes (stage update, notification, AND customer sync) together
+        db.session.commit() 
+        current_app.logger.info(f"💾 Committed changes for job {job_id}. New stage: {new_stage}.")
+
         return jsonify({
             'message': 'Stage updated successfully',
             'job_id': job.id,
             'old_stage': old_stage,
             'new_stage': new_stage
         }), 200
-        
+
     except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        db.session.rollback() # Rollback ALL changes if anything fails
+        current_app.logger.error(f"❌ Error updating job stage for {job_id}: {e}") # Log error
+        return jsonify({'error': f'Failed to update stage: {str(e)}'}), 500

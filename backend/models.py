@@ -847,6 +847,24 @@ class VersionedSnapshot(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     created_by = db.Column(db.String(200))
 
+# ----------------------------------
+# Notifications
+# ----------------------------------
+
+class ProductionNotification(db.Model):
+    __tablename__ = 'production_notifications'
+    
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    job_id = db.Column(db.String(36), db.ForeignKey('jobs.id'), nullable=True)
+    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=True)
+    message = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    read = db.Column(db.Boolean, default=False)
+    moved_by = db.Column(db.String(255), nullable=True)
+    
+    # Relationships
+    job = db.relationship('Job', backref='notifications')
+    customer = db.relationship('Customer', backref='notifications')
 
 # ----------------------------------
 # Forms / Submissions / Imports
@@ -873,17 +891,25 @@ class CustomerFormData(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=False)
     form_data = db.Column(db.Text, nullable=False)
-    token_used = db.Column(db.String(64), nullable=True)  # Changed to nullable=True
+    token_used = db.Column(db.String(64), nullable=True)
     submitted_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     # Approval fields
-    approval_status = db.Column(db.String(20), default='pending')  # 'pending', 'approved', 'rejected'
+    approval_status = db.Column(db.String(20), default='pending')
     approved_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     approval_date = db.Column(db.DateTime, nullable=True)
     rejection_reason = db.Column(db.Text, nullable=True)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
 
     customer = db.relationship('Customer', back_populates='form_data')
+    
+    # ✅ ADD THIS LINE - Define the relationship with cascade delete
+    notifications = db.relationship(
+        'ApprovalNotification',
+        backref='document',
+        cascade='all, delete-orphan',  # ✅ This ensures notifications are deleted when form is deleted
+        foreign_keys='ApprovalNotification.document_id'
+    )
 
     def __repr__(self):
         return f'<CustomerFormData {self.id} for Customer {self.customer_id}>'
@@ -893,16 +919,23 @@ class ApprovalNotification(db.Model):
     
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    document_type = db.Column(db.String(50), nullable=False)  # 'invoice', 'receipt', etc.
-    document_id = db.Column(db.Integer, db.ForeignKey('customer_form_data.id'), nullable=False)
-    status = db.Column(db.String(20), default='pending')  # 'pending', 'approved', 'rejected'
+    document_type = db.Column(db.String(50), nullable=False)
+    
+    # ✅ FIX: Add ondelete='CASCADE' to the foreign key
+    document_id = db.Column(
+        db.Integer, 
+        db.ForeignKey('customer_form_data.id', ondelete='CASCADE'),  # ✅ This is the key change
+        nullable=False
+    )
+    
+    status = db.Column(db.String(20), default='pending')
     message = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     is_read = db.Column(db.Boolean, default=False)
     
     # Relationships
     user = db.relationship('User', backref='notifications')
-    document = db.relationship('CustomerFormData', backref='notifications')
+    # ✅ Remove the document relationship from here
     
     def __repr__(self):
         return f'<ApprovalNotification {self.id} for User {self.user_id}>'
@@ -940,10 +973,14 @@ class Assignment(db.Model):
     title = db.Column(db.String(255), nullable=False)
     date = db.Column(db.Date, nullable=False)
     
-    # Staff assignment - now just a string field
-    team_member = db.Column(db.String(200))  # Store name as string
-
+    # Staff assignment - BOTH user_id (FK) and team_member (string for display)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'))  # FK to User table
+    team_member = db.Column(db.String(200))  # Denormalized name for quick display
+    
     calendar_event_id = db.Column(db.String(255), nullable=True)
+    
+    # Who created/assigned this
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     
     # Job-related fields
     job_id = db.Column(db.String(36), db.ForeignKey('jobs.id'))
@@ -952,34 +989,26 @@ class Assignment(db.Model):
     # Time fields
     start_time = db.Column(db.Time)
     end_time = db.Column(db.Time)
-    estimated_hours = db.Column(db.Float)  # Calculated from start/end time or manually set
+    estimated_hours = db.Column(db.Float)
     
     # Additional info
     notes = db.Column(db.Text)
     priority = db.Column(db.String(20), default='Medium')
-    status = db.Column(db.String(20), default='Scheduled')  # Scheduled, In Progress, Completed, Cancelled
+    status = db.Column(db.String(20), default='Scheduled')
     
     # Audit fields
-    created_by = db.Column(db.String(200))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_by = db.Column(db.String(200))
+    updated_by = db.Column(db.Integer)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
     job = db.relationship('Job', backref='assignments')
     customer = db.relationship('Customer', backref='assignments')
+    assigned_user = db.relationship('User', foreign_keys=[user_id], backref='assignments')
+    creator = db.relationship('User', foreign_keys=[created_by], backref='created_assignments')
     
     def __repr__(self):
         return f'<Assignment {self.id}: {self.title} on {self.date}>'
-    
-    def calculate_hours(self):
-        """Calculate hours from start_time and end_time"""
-        if self.start_time and self.end_time:
-            start_datetime = datetime.combine(datetime.today(), self.start_time)
-            end_datetime = datetime.combine(datetime.today(), self.end_time)
-            duration = end_datetime - start_datetime
-            return duration.total_seconds() / 3600
-        return self.estimated_hours or 0
     
     def to_dict(self):
         return {
@@ -987,7 +1016,8 @@ class Assignment(db.Model):
             'type': self.type,
             'title': self.title,
             'date': self.date.isoformat() if self.date else None,
-            'team_member': self.team_member,  # Return as string
+            'user_id': self.user_id,
+            'team_member': self.team_member,
             'job_id': self.job_id,
             'customer_id': self.customer_id,
             'start_time': self.start_time.strftime('%H:%M') if self.start_time else None,
@@ -998,10 +1028,11 @@ class Assignment(db.Model):
             'status': self.status,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
-            # Include related data
             'job_reference': self.job.job_reference if self.job else None,
             'customer_name': self.customer.name if self.customer else None,
-        }# models.py - Updated schema with Approval System
+        }
+    
+    # models.py - Updated schema with Approval System
 # Added approval fields to CustomerFormData for invoice/receipt/checklist approval workflow
 
 import uuid

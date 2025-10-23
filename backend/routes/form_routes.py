@@ -1150,31 +1150,33 @@ def cleanup_expired_tokens():
         current_app.logger.exception("Cleanup failed")
         return jsonify({'success': False, 'error': f'Cleanup failed: {str(e)}'}), 500
 
-@form_bp.route('/form-submissions/<int:submission_id>', methods=['DELETE', 'OPTIONS'])
+@form_bp.route('/form-submissions/<int:submission_id>', methods=['DELETE'])
+@token_required
 def delete_form_submission(submission_id):
-    """Delete a form submission by ID"""
-    if request.method == 'OPTIONS':
-        return jsonify({}), 200
-    
+    """
+    Delete a form submission and its related approval notifications.
+    Fixed to handle the NOT NULL constraint on approval_notifications.document_id
+    """
     try:
-        submission = CustomerFormData.query.get(submission_id)
-        if not submission:
-            current_app.logger.warning(f"Form submission {submission_id} not found")
-            return jsonify({'error': 'Form submission not found'}), 404
+        # Get the form submission
+        submission = CustomerFormData.query.get_or_404(submission_id)
         
-        customer_id = submission.customer_id
+        # ✅ FIX: Delete related approval notifications FIRST before deleting the submission
+        # This prevents the NOT NULL constraint error
+        ApprovalNotification.query.filter_by(document_id=submission_id).delete()
         
+        # Now safely delete the form submission
         db.session.delete(submission)
         db.session.commit()
         
-        current_app.logger.info(f"Form submission {submission_id} deleted successfully for customer {customer_id}")
-        
         return jsonify({
-            'success': True,
-            'message': 'Form submission deleted successfully'
+            'message': 'Form submission deleted successfully',
+            'id': submission_id
         }), 200
         
     except Exception as e:
         db.session.rollback()
-        current_app.logger.exception(f"Error deleting form submission {submission_id}: {e}")
-        return jsonify({'error': f'Failed to delete form submission: {str(e)}'}), 500
+        print(f"[ERROR] Failed to delete form submission {submission_id}: {str(e)}")
+        return jsonify({
+            'error': f'Failed to delete form submission: {str(e)}'
+        }), 500
