@@ -19,15 +19,15 @@ def create_app():
     
     # Initialize extensions
     CORS(app, 
-     supports_credentials=True, 
-     origins=[
-         'http://localhost:3000',
-         'http://localhost:3001',
-         'http://127.0.0.1:3000',
-         'http://127.0.0.1:3001'
-     ],
-     allow_headers=['Content-Type', 'Authorization'],
-     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+        supports_credentials=True, 
+        origins=[
+            'http://localhost:3000',
+            'http://localhost:3001',
+            'http://127.0.0.1:3000',
+            'http://127.0.0.1:3001'
+        ],
+        allow_headers=['Content-Type', 'Authorization'],
+        methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
     )
     init_db(app)
     
@@ -39,6 +39,8 @@ def create_app():
     from routes.notification_routes import notification_bp
     from routes.assignment_routes import assignment_bp
     from routes.appliance_routes import appliance_bp
+    # 💡 FIX: Import the missing customer_bp
+    from routes.customer_routes import customer_bp
     
     app.register_blueprint(auth_bp)
     app.register_blueprint(approvals_bp)
@@ -47,6 +49,8 @@ def create_app():
     app.register_blueprint(notification_bp)
     app.register_blueprint(assignment_bp)
     app.register_blueprint(appliance_bp)
+    # 💡 FIX: Register the missing customer_bp
+    app.register_blueprint(customer_bp)
     
     return app
 

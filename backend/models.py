@@ -1071,6 +1071,42 @@ class DataImport(db.Model):
     def __repr__(self):
         return f'<DataImport {self.filename} ({self.status})>'
 
+class DrawingDocument(db.Model):
+    __tablename__ = 'drawing_documents'
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    
+    # FOREIGN KEYS: Links to Customer and Project
+    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=False)
+    project_id = db.Column(db.String(36), db.ForeignKey('projects.id'), nullable=True) # Optional link to a project
+    
+    # File details
+    file_name = db.Column(db.String(255), nullable=False)
+    storage_path = db.Column(db.String(500), nullable=False) # Path on disk or S3/Cloud Storage key
+    file_url = db.Column(db.String(500), nullable=False)     # URL to download/view the file
+    mime_type = db.Column(db.String(100))
+    category = db.Column(db.String(50), default='Drawing')   # e.g., 'Drawing', 'Layout', 'Photo'
+    
+    # Audit
+    uploaded_by = db.Column(db.String(200))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # RELATIONSHIPS
+    customer = db.relationship('Customer', backref='drawing_documents')
+    project = db.relationship('Project', backref='drawing_documents')
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'customer_id': self.customer_id,
+            'project_id': self.project_id,
+            'filename': self.file_name,
+            'url': self.file_url,
+            'type': self.category, # Using category for the frontend's 'type' field
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'uploaded_by': self.uploaded_by
+        }
+
 
 class Assignment(db.Model):
     __tablename__ = 'assignments'

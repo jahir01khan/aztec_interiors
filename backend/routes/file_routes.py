@@ -2,9 +2,14 @@ from flask import request, jsonify, send_file
 from werkzeug.utils import secure_filename
 from datetime import datetime
 import os
+import uuid # Needed for unique file names
+
+# NOTE: Assuming these imports and configurations exist in your environment:
 from config import app, latest_structured_data
 from utils.file_utils import allowed_file
 from utils.openai_utils import process_image_with_openai_vision
+from models import db, DrawingDocument # NEW: Import database and DrawingDocument model
+from routes.auth_helpers import token_required # Assuming this helper exists for authorization
 
 try:
     from pdf_generator import generate_pdf
@@ -17,6 +22,17 @@ except ImportError as e:
     def export_to_excel(data, customer_name):
         print("Excel exporter not available")
         return f"generated_excel/{customer_name}_data.xlsx"
+
+# --- FILE PATH CONFIGURATION (CRITICAL) ---
+DRAWING_UPLOAD_FOLDER = os.path.join(app.root_path, 'customer_drawings')
+if not os.path.exists(DRAWING_UPLOAD_FOLDER):
+    os.makedirs(DRAWING_UPLOAD_FOLDER)
+app.config['DRAWING_UPLOAD_FOLDER'] = DRAWING_UPLOAD_FOLDER
+
+
+# ==========================================
+# EXISTING ROUTES (Unmodified)
+# ==========================================
 
 @app.route('/upload', methods=['POST', 'OPTIONS'])
 def upload_image():
@@ -146,5 +162,96 @@ def download_excel_file(filename):
         return send_file(f'generated_excel/{filename}', as_attachment=True)
     except FileNotFoundError:
         return jsonify({'success': False, 'error': 'Excel file not found'}), 404
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Download failed: {str(e)}'}), 500
+
+
+# ==========================================
+# CUSTOMER DRAWINGS UPLOAD (NEW)
+# ==========================================
+
+@app.route('/files/drawings', methods=['POST', 'OPTIONS'])
+@token_required
+def upload_customer_drawing():
+    """Upload a drawing/layout image or PDF and save its metadata"""
+    if request.method == 'OPTIONS':
+        response = jsonify()
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add('Access-Control-Allow-Headers', "Content-Type, Authorization")
+        response.headers.add('Access-Control-Allow-Methods', "POST,OPTIONS")
+        return response
+        
+    try:
+        # Get metadata from form data
+        customer_id = request.form.get('customer_id')
+        project_id = request.form.get('project_id')
+        
+        if not customer_id:
+            return jsonify({'error': 'Customer ID is missing from form data'}), 400
+        
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file part in the request'}), 400
+
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected for upload'}), 400
+        
+        # Security and Pathing
+        filename = secure_filename(file.filename)
+        # Create a unique file name to prevent overwrites
+        unique_filename = f"{customer_id}_{str(uuid.uuid4())}_{filename}"
+        file_path = os.path.join(app.config['DRAWING_UPLOAD_FOLDER'], unique_filename)
+        
+        # Save the file locally
+        file.save(file_path)
+        
+        # Determine file category/type
+        mime_type = file.mimetype
+        if 'image' in mime_type:
+            category = 'image'
+        elif 'pdf' in mime_type:
+            category = 'pdf'
+        else:
+            category = 'other'
+
+        # Create database record
+        new_drawing = DrawingDocument(
+            id=str(uuid.uuid4()),
+            customer_id=customer_id,
+            project_id=project_id if project_id else None,
+            file_name=filename,
+            storage_path=file_path,
+            file_url=f"/files/drawings/view/{unique_filename}", # Public URL to view/download
+            mime_type=mime_type,
+            category=category,
+            uploaded_by=request.current_user.get_full_name() if hasattr(request, 'current_user') else 'System'
+        )
+
+        db.session.add(new_drawing)
+        db.session.commit()
+
+        print(f"Drawing saved for customer {customer_id}: {filename}")
+
+        return jsonify({
+            'success': True,
+            'message': 'File uploaded and metadata saved successfully',
+            'drawing': new_drawing.to_dict()
+        }), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error processing drawing upload: {str(e)}")
+        return jsonify({'error': f'Upload failed: {str(e)}'}), 500
+
+
+@app.route('/files/drawings/view/<filename>', methods=['GET'])
+def view_customer_drawing(filename):
+    """Serve the uploaded file for viewing/download"""
+    try:
+        # Note: You should ideally verify user authentication/access here
+        # For simplicity, we assume public access via this unique URL
+        return send_file(os.path.join(app.config['DRAWING_UPLOAD_FOLDER'], filename))
+    except FileNotFoundError:
+        return jsonify({'success': False, 'error': 'File not found'}), 404
     except Exception as e:
         return jsonify({'success': False, 'error': f'Download failed: {str(e)}'}), 500

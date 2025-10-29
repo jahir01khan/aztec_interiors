@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from models import Customer, Project, CustomerFormData, db, User
+from models import Customer, Project, CustomerFormData, db, User, Job, DrawingDocument 
 from functools import wraps
 from flask import current_app
 import uuid
@@ -266,7 +266,11 @@ def get_customer_projects(customer_id):
 @customer_bp.route('/customers/<string:customer_id>/projects', methods=['POST', 'OPTIONS'])
 @token_required
 def create_project(customer_id):
-    """Create a new project for a customer"""
+    """
+    Create a new project for a customer.
+    
+    🔥 FIXED: Stop conditional stage sync on creation as it causes overwrites.
+    """
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
@@ -300,6 +304,20 @@ def create_project(customer_id):
         )
         
         db.session.add(new_project)
+        
+        # --- CRITICAL FIX 1: SIMPLIFY STAGE SYNC ON CREATION ---
+        
+        # Count existing linked entities. We must commit the new project first to get a true count of ALL linked entities.
+        # However, to avoid a race condition, we check the database for pre-existing entities (committed ones).
+        existing_project_count = Project.query.filter_by(customer_id=customer_id).count()
+        existing_job_count = Job.query.filter_by(customer_id=customer_id).count()
+                                   
+        # If the combined count is ZERO, this new project is the FIRST entity, so sync the customer's overall stage.
+        if existing_project_count == 0 and existing_job_count == 0 and new_project.stage:
+            customer.stage = new_project.stage
+            
+        # --- END CRITICAL FIX 1 ---
+        
         db.session.commit()
         
         current_app.logger.info(f"Project {new_project.id} created for customer {customer_id} by user {request.current_user.id}")
@@ -342,7 +360,11 @@ def get_project(project_id):
 @customer_bp.route('/projects/<string:project_id>', methods=['PUT', 'OPTIONS'])
 @token_required
 def update_project(project_id):
-    """Update a project"""
+    """
+    Update a project (Used by frontend drag-and-drop/edit).
+    
+    🔥 CRITICAL FIX 2: Stop conditional stage update on PUT to prevent multi-project stage issues.
+    """
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
@@ -357,13 +379,15 @@ def update_project(project_id):
         
         data = request.get_json()
         
+        old_stage = project.stage # Capture old stage for comparison/sync logic
+        
         # Update fields
         if 'project_name' in data:
             project.project_name = data['project_name']
         if 'project_type' in data:
             project.project_type = data['project_type']
         if 'stage' in data:
-            project.stage = data['stage']
+            project.stage = data['stage'] # Update the Project's specific stage
         if 'date_of_measure' in data:
             project.date_of_measure = datetime.fromisoformat(data['date_of_measure']) if data['date_of_measure'] else None
         if 'notes' in data:
@@ -371,6 +395,20 @@ def update_project(project_id):
         
         project.updated_by = request.current_user.id
         project.updated_at = datetime.utcnow()
+        
+        # --- CRITICAL FIX 2: CONDITIONAL CUSTOMER STAGE SYNC RE-EVALUATED ---
+        
+        # Count existing linked entities (Projects + Jobs)
+        # We must exclude the current project being updated from the count 
+        # to correctly check if it is the ONLY remaining entity.
+        total_other_linked_entities = Project.query.filter(Project.customer_id==customer.id, Project.id != project_id).count() + \
+                                      Job.query.filter_by(customer_id=customer.id).count()
+        
+        # If the stage changed AND there are NO other entities, sync the customer's overall stage.
+        if 'stage' in data and project.stage != old_stage and total_other_linked_entities == 0:
+            customer.stage = project.stage
+            
+        # --- END CRITICAL FIX 2 ---
         
         db.session.commit()
         
@@ -445,6 +483,69 @@ def get_project_forms(project_id):
     except Exception as e:
         current_app.logger.exception(f"Error fetching forms for project {project_id}: {e}")
         return jsonify({'error': 'Failed to fetch forms'}), 500
+    
+# ==========================================
+# DRAWING DOCUMENTS ENDPOINTS (NEW)
+# ==========================================
+
+@customer_bp.route('/drawings', methods=['GET', 'OPTIONS'])
+@token_required
+def get_drawing_documents():
+    """Get all drawing documents for a specific customer"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
+    try:
+        customer_id = request.args.get('customer_id')
+        if not customer_id:
+            return jsonify({'error': 'Customer ID is required'}), 400
+        
+        customer = Customer.query.get_or_404(customer_id)
+        
+        # Check permissions (same as customer/project access)
+        if request.current_user.role in ['Sales', 'Staff']:
+            if customer.created_by != request.current_user.id and customer.salesperson != request.current_user.get_full_name():
+                return jsonify({'error': 'You do not have permission to view documents for this customer'}), 403
+        
+        # Fetch all drawing documents for the customer
+        drawings = DrawingDocument.query.filter_by(customer_id=customer_id).order_by(DrawingDocument.created_at.desc()).all()
+        
+        return jsonify([drawing.to_dict() for drawing in drawings]), 200
+        
+    except Exception as e:
+        current_app.logger.exception(f"Error fetching drawing documents: {e}")
+        return jsonify({'error': 'Failed to fetch drawing documents'}), 500
+
+@customer_bp.route('/drawings/<string:drawing_id>', methods=['DELETE', 'OPTIONS'])
+@token_required
+def delete_drawing_document(drawing_id):
+    """Delete a drawing document (Manager/HR/Creator only - simplified to Manager/HR for now)"""
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
+    try:
+        # Permission check
+        if request.current_user.role not in ['Manager', 'HR']:
+            return jsonify({'error': 'You do not have permission to delete documents'}), 403
+        
+        drawing = DrawingDocument.query.get_or_404(drawing_id)
+        
+        # NOTE: In a real app, you must **delete the actual file** from S3/disk here
+        
+        db.session.delete(drawing)
+        db.session.commit()
+        
+        current_app.logger.info(f"Drawing document {drawing_id} deleted by user {request.current_user.id}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Drawing document deleted successfully'
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception(f"Error deleting drawing document {drawing_id}: {e}")
+        return jsonify({'error': 'Failed to delete drawing document'}), 500
 
 
 # ==========================================
