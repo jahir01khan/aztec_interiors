@@ -13,13 +13,14 @@ notification_bp = Blueprint('notification', __name__)
 def get_production_notifications():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
-        
+
     # Ensure only Production roles can access this
-    if request.current_user.role != "Production":
-        return jsonify({'error': 'Not authorized'}), 403
+    # --- TASK 2: REMOVE ROLE CHECK TO ALLOW ALL USERS ---
+    # if request.current_user.role != "Production":
+    #     return jsonify({'error': 'Not authorized'}), 403
 
     notifications = ProductionNotification.query.filter_by(read=False).order_by(ProductionNotification.created_at.desc()).all()
-    
+
     return jsonify([
         {
             'id': n.id,
@@ -37,13 +38,14 @@ def mark_as_read(notification_id):
     if request.method == 'OPTIONS':
         return jsonify({}), 200
 
-    if request.current_user.role != "Production":
-        return jsonify({'error': 'Not authorized'}), 403
+    # --- TASK 2: REMOVE ROLE CHECK TO ALLOW ALL USERS ---
+    # if request.current_user.role != "Production":
+    #     return jsonify({'error': 'Not authorized'}), 403
 
     notification = ProductionNotification.query.get(notification_id)
     if not notification:
         return jsonify({'error': 'Notification not found'}), 404
-        
+
     try:
         notification.read = True
         db.session.commit()
@@ -58,8 +60,9 @@ def mark_all_as_read():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
 
-    if request.current_user.role != "Production":
-        return jsonify({'error': 'Not authorized'}), 403
+    # --- TASK 2: REMOVE ROLE CHECK TO ALLOW ALL USERS ---
+    # if request.current_user.role != "Production":
+    #     return jsonify({'error': 'Not authorized'}), 403
 
     try:
         # Update all unread notifications in one query

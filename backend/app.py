@@ -41,6 +41,7 @@ def create_app():
     from routes.appliance_routes import appliance_bp
     # 💡 FIX: Import the missing customer_bp
     from routes.customer_routes import customer_bp
+    from routes.file_routes import file_bp
     
     app.register_blueprint(auth_bp)
     app.register_blueprint(approvals_bp)
@@ -51,6 +52,7 @@ def create_app():
     app.register_blueprint(appliance_bp)
     # 💡 FIX: Register the missing customer_bp
     app.register_blueprint(customer_bp)
+    app.register_blueprint(file_bp)
     
     return app
 
