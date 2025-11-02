@@ -1,10 +1,11 @@
-from flask import Blueprint, request, jsonify, current_app
-from database import db
-from models import User, LoginAttempt, Session
+from flask import Blueprint, request, jsonify, current_app, g
+from backend.database import db
+from backend.models import User, LoginAttempt, Session
 from datetime import datetime, timedelta
 from functools import wraps
 import secrets
 import re
+import jwt
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -63,38 +64,39 @@ def log_login_attempt(email, ip_address, success):
 # --- Decorators (Unchanged) ---
 
 def token_required(f):
-    """Decorator to require authentication"""
+    """Decorator to require valid JWT token"""
     @wraps(f)
     def decorated(*args, **kwargs):
         token = None
-        
+
         if 'Authorization' in request.headers:
-            auth_header = request.headers['Authorization']
             try:
-                token = auth_header.split(" ")[1]
+                token = request.headers['Authorization'].split(" ")[1]
             except IndexError:
                 return jsonify({'error': 'Invalid token format'}), 401
-        
+
         if not token:
             return jsonify({'error': 'Token is missing'}), 401
-        
-        # ✅ SIMPLE TOKEN VERIFICATION (instead of JWT)
-        session = Session.query.filter_by(session_token=token).first()
-        
-        if not session:
-            return jsonify({'error': 'Invalid token'}), 401
-        
-        if session.expires_at < datetime.utcnow():
+
+        try:
+            payload = jwt.decode(token, current_app.config['SECRET_KEY'], algorithms=['HS256'])
+            user = User.query.get(payload['user_id'])
+            if not user or not user.is_active:
+                return jsonify({'error': 'User not found or inactive'}), 401
+
+            # Optionally check token expiry in DB session (extra layer of validation)
+            session = Session.query.filter_by(session_token=token, user_id=user.id).first()
+            if not session or session.expires_at < datetime.utcnow():
+                return jsonify({'error': 'Token expired'}), 401
+
+            g.user = user
+
+        except jwt.ExpiredSignatureError:
             return jsonify({'error': 'Token expired'}), 401
-        
-        user = User.query.get(session.user_id)
-        if not user or not user.is_active:
-            return jsonify({'error': 'User not found or inactive'}), 401
-        
-        g.user = user
-        
+        except jwt.InvalidTokenError:
+            return jsonify({'error': 'Invalid token'}), 401
+
         return f(*args, **kwargs)
-    
     return decorated
 
 def admin_required(f):
@@ -109,12 +111,16 @@ def admin_required(f):
         # Define roles that have 'admin' level power for user management
         ADMIN_ROLES = ['Manager', 'HR'] 
         
-        if request.current_user.role not in ADMIN_ROLES:
+        if g.user.role not in ADMIN_ROLES:
             return jsonify({'error': 'Manager or HR access required'}), 403
         return f(*args, **kwargs)
     return decorated
 
 # --- Routes (Updated Commit Logic) ---
+
+@auth_bp.route('/health', methods=['GET'])
+def health_check():
+    return {'status': 'ok', 'message': 'Backend is running successfully!'}, 200
 
 @auth_bp.route('/auth/register', methods=['POST'])
 def register():
@@ -183,76 +189,56 @@ def register():
 
 @auth_bp.route('/auth/login', methods=['POST'])
 def login():
-    """Login user"""
     try:
-        data = request.get_json()
-        
+        data = request.get_json() or {}
         if not data.get('email') or not data.get('password'):
-            return jsonify({'error': 'Email and password are required'}), 400
-        
+            return jsonify({'error': 'Email and password required'}), 400
+
         email = data['email'].lower().strip()
-        password = data['password']
-        ip_address = get_client_ip()
-        
-        if not check_rate_limit(email):
-            return jsonify({'error': 'Too many failed login attempts. Try again later.'}), 429
-        
         user = User.query.filter_by(email=email).first()
-        
-        if not user or not user.check_password(password):
-            log_login_attempt(email, ip_address, False)
+        ip = get_client_ip()
+
+        if not check_rate_limit(email):
+            return jsonify({'error': 'Too many failed attempts'}), 429
+
+        if not user or not user.check_password(data['password']):
+            log_login_attempt(email, ip, False)
             db.session.commit()
             return jsonify({'error': 'Invalid email or password'}), 401
-        
+
         if not user.is_active:
-            return jsonify({'error': 'Account is disabled'}), 401
-        
+            return jsonify({'error': 'Account disabled'}), 401
+
         user.last_login = datetime.utcnow()
-        
-        # ✅ TEMPORARY FIX: Use simple token instead of JWT
-        import secrets
-        token = f"token_{user.id}_{secrets.token_urlsafe(32)}"
-        
+
+        # ✅ Generate JWT token
+        payload = {
+            'user_id': user.id,
+            'exp': datetime.utcnow() + timedelta(days=7),
+            'iat': datetime.utcnow()
+        }
+        token = jwt.encode(payload, current_app.config['SECRET_KEY'], algorithm='HS256')
+
+        # ✅ Save session
         session = Session(
             user_id=user.id,
             session_token=token,
-            ip_address=ip_address,
+            ip_address=ip,
             user_agent=request.headers.get('User-Agent', '')[:255],
-            expires_at=datetime.utcnow() + timedelta(days=30)
+            expires_at=datetime.utcnow() + timedelta(days=7)
         )
         db.session.add(session)
-        
-        log_login_attempt(email, ip_address, True)
+        log_login_attempt(email, ip, True)
         db.session.commit()
-        
-        print(f"✅ User logged in: {email}")
-        
+
         return jsonify({
             'success': True,
             'message': 'Login successful',
             'token': token,
-            'user': {
-                'id': user.id,
-                'email': user.email,
-                'first_name': user.first_name,
-                'last_name': user.last_name,
-                'full_name': user.full_name,
-                'name': user.full_name,
-                'role': user.role,
-                'department': user.department,
-                'phone': user.phone,
-                'is_active': user.is_active,
-                'is_verified': user.is_verified,
-                'created_at': user.created_at.isoformat() if user.created_at else None,
-                'last_login': user.last_login.isoformat() if user.last_login else None,
-            }
+            'user': user.to_dict()
         }), 200
-        
     except Exception as e:
         db.session.rollback()
-        print(f"❌ Login error: {str(e)}")
-        import traceback
-        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @auth_bp.route('/auth/logout', methods=['POST'])
@@ -280,7 +266,7 @@ def get_current_user():
     """Get current user information"""
     try:
         return jsonify({
-            'user': request.current_user.to_dict()
+            'user': g.user.to_dict()
         }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -303,7 +289,7 @@ def get_staff_users():
 def refresh_token():
     """Refresh JWT token"""
     try:
-        user = request.current_user
+        user = g.user
         new_token = user.generate_jwt_token(current_app.config['SECRET_KEY'])
         
         # Update session with new token
@@ -407,7 +393,7 @@ def change_password():
         
         current_password = data['current_password']
         new_password = data['new_password']
-        user = request.current_user
+        user = g.user
         
         # Verify current password
         if not user.check_password(current_password):
@@ -443,6 +429,7 @@ def get_users():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    
 
 @auth_bp.route('/auth/users/<int:user_id>/toggle-status', methods=['POST'])
 @admin_required

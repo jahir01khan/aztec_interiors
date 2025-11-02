@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
-from database import db, init_db
+from backend.database import db, init_db
 import os
 from dotenv import load_dotenv
 
@@ -97,15 +97,16 @@ def create_app():
     init_db(app)
     
     # Register blueprints
-    from routes.auth_routes import auth_bp
-    from routes.approvals_routes import approvals_bp
-    from routes.form_routes import form_bp
-    from routes.db_routes import db_bp 
-    from routes.notification_routes import notification_bp
-    from routes.assignment_routes import assignment_bp
-    from routes.appliance_routes import appliance_bp
-    from routes.customer_routes import customer_bp
-    from routes.file_routes import file_bp
+    from backend.routes.auth_routes import auth_bp
+    from backend.routes.approvals_routes import approvals_bp
+    from backend.routes.form_routes import form_bp
+    from backend.routes.db_routes import db_bp 
+    from backend.routes.notification_routes import notification_bp
+    from backend.routes.assignment_routes import assignment_bp
+    from backend.routes.appliance_routes import appliance_bp
+    from backend.routes.customer_routes import customer_bp
+    from backend.routes.file_routes import file_bp
+
     
     app.register_blueprint(auth_bp)
     app.register_blueprint(approvals_bp)
