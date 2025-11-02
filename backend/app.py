@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 from database import db, init_db
 import os
@@ -17,37 +17,86 @@ def create_app():
     app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     
-    # ✅ CRITICAL: Initialize CORS BEFORE registering blueprints
+    # ============================================
+    # CORS CONFIGURATION - ALLOW ALL
+    # ============================================
     CORS(app, 
          resources={r"/*": {
              "origins": "*",
              "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-             "allow_headers": ["Content-Type", "Authorization"],
+             "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
              "expose_headers": ["Content-Type", "Authorization"],
+             "supports_credentials": False,
+             "max_age": 3600
          }})
     
-    # ✅ CRITICAL: Add explicit OPTIONS handler
-    @app.route('/', defaults={'path': ''}, methods=['OPTIONS'])
-    @app.route('/<path:path>', methods=['OPTIONS'])
-    def handle_options(path):
-        response = jsonify({'status': 'ok'})
-        response.headers['Access-Control-Allow-Origin'] = '*'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
-        response.headers['Access-Control-Max-Age'] = '3600'
-        return response, 200
-    
-    # ✅ Add CORS headers to ALL responses
+    # Add CORS headers to every response
     @app.after_request
     def after_request(response):
-        response.headers['Access-Control-Allow-Origin'] = '*'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        origin = request.headers.get('Origin')
+        if origin:
+            response.headers['Access-Control-Allow-Origin'] = origin
+        else:
+            response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+        response.headers['Access-Control-Max-Age'] = '3600'
         return response
     
+    # ============================================
+    # OPTIONS HANDLER - HANDLE ALL PREFLIGHT
+    # ============================================
+    @app.route('/', defaults={'path': ''}, methods=['OPTIONS'])
+    @app.route('/<path:path>', methods=['OPTIONS'])
+    def handle_options(path=''):
+        """Handle all OPTIONS requests (CORS preflight)"""
+        return '', 200
+    
+    # ============================================
+    # MOCK AUTH MIDDLEWARE - ACCEPT MOCK TOKEN
+    # ============================================
+    @app.before_request
+    def check_auth():
+        """Accept mock token temporarily for frontend development"""
+        # Skip auth check for OPTIONS requests
+        if request.method == 'OPTIONS':
+            return None
+        
+        # Skip auth for public endpoints
+        if request.path.startswith('/submit-customer-form') or request.path.startswith('/form'):
+            return None
+            
+        # Get auth header
+        auth_header = request.headers.get('Authorization', '')
+        
+        if auth_header:
+            token = auth_header.replace('Bearer ', '')
+            
+            # ✅ ACCEPT MOCK TOKEN
+            if token == 'mock-jwt-token-123':
+                print(f"✅ Mock token accepted for {request.method} {request.path}")
+                g.user = {
+                    'id': 1,
+                    'email': 'test@example.com',
+                    'first_name': 'Test',
+                    'last_name': 'User',
+                    'role': 'manager'
+                }
+                return None
+        
+        # ✅ ALLOW REQUESTS WITHOUT AUTH (for testing)
+        print(f"⚠️ No auth for {request.method} {request.path} - allowing anyway")
+        g.user = {
+            'id': 1,
+            'email': 'test@example.com',
+            'role': 'manager'
+        }
+        return None
+    
+    # Initialize database
     init_db(app)
     
-    # Register blueprints AFTER CORS setup
+    # Register blueprints
     from routes.auth_routes import auth_bp
     from routes.approvals_routes import approvals_bp
     from routes.form_routes import form_bp
@@ -75,6 +124,11 @@ if __name__ == '__main__':
     
     with app.app_context():
         db.create_all()
-        print("Database tables created successfully!")
+        print("=" * 50)
+        print("✅ Database tables created successfully!")
+        print("✅ CORS enabled for all origins")
+        print("✅ Mock token 'mock-jwt-token-123' will be accepted")
+        print("✅ Server starting...")
+        print("=" * 50)
     
     app.run(debug=True, host='0.0.0.0', port=5000)
