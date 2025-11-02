@@ -9,7 +9,7 @@ import uuid
 import secrets
 from datetime import datetime, timedelta
 
-from database import db  # Import SQLAlchemy instance
+from backend.database import db  # Import SQLAlchemy instance
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
 
