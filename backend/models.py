@@ -97,6 +97,12 @@ class User(db.Model):
     def get_full_name(self) -> str:
         return f"{self.first_name} {self.last_name}"
 
+    # ✅ ADD THIS PROPERTY
+    @property
+    def full_name(self):
+        """Return full name of user - property for direct access"""
+        return f"{self.first_name} {self.last_name}"
+
     # Tokens
     def generate_reset_token(self) -> str:
         self.reset_token = secrets.token_urlsafe(32)
@@ -134,7 +140,7 @@ class User(db.Model):
             'email': self.email,
             'first_name': self.first_name,
             'last_name': self.last_name,
-            'full_name': self.get_full_name(),
+            'full_name': self.full_name,  # ✅ Now works as property
             'phone': self.phone,
             'role': self.role,
             'department': self.department,
