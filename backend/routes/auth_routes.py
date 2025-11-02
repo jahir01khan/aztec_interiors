@@ -68,28 +68,30 @@ def token_required(f):
     def decorated(*args, **kwargs):
         token = None
         
-        # Check for token in Authorization header
         if 'Authorization' in request.headers:
             auth_header = request.headers['Authorization']
             try:
-                token = auth_header.split(" ")[1]  # Bearer TOKEN
+                token = auth_header.split(" ")[1]
             except IndexError:
                 return jsonify({'error': 'Invalid token format'}), 401
         
         if not token:
             return jsonify({'error': 'Token is missing'}), 401
         
-        try:
-            # Verify the token
-            current_user = User.verify_jwt_token(token, current_app.config['SECRET_KEY'])
-            if not current_user:
-                return jsonify({'error': 'Token is invalid or expired'}), 401
-            
-            # Add current user to the request context
-            request.current_user = current_user
-            
-        except Exception as e:
-            return jsonify({'error': 'Token verification failed'}), 401
+        # ✅ SIMPLE TOKEN VERIFICATION (instead of JWT)
+        session = Session.query.filter_by(session_token=token).first()
+        
+        if not session:
+            return jsonify({'error': 'Invalid token'}), 401
+        
+        if session.expires_at < datetime.utcnow():
+            return jsonify({'error': 'Token expired'}), 401
+        
+        user = User.query.get(session.user_id)
+        if not user or not user.is_active:
+            return jsonify({'error': 'User not found or inactive'}), 401
+        
+        g.user = user
         
         return f(*args, **kwargs)
     
@@ -192,54 +194,65 @@ def login():
         password = data['password']
         ip_address = get_client_ip()
         
-        # Check rate limiting
         if not check_rate_limit(email):
             return jsonify({'error': 'Too many failed login attempts. Try again later.'}), 429
         
-        # Find user
         user = User.query.filter_by(email=email).first()
         
         if not user or not user.check_password(password):
-            # Log failed attempt and commit immediately (as there is no larger transaction)
             log_login_attempt(email, ip_address, False)
-            db.session.commit() # Commit failure log now
+            db.session.commit()
             return jsonify({'error': 'Invalid email or password'}), 401
         
         if not user.is_active:
             return jsonify({'error': 'Account is disabled'}), 401
         
-        # --- Successful Login Transaction ---
-        
-        # Update last login
         user.last_login = datetime.utcnow()
         
-        # Generate JWT token
-        token = user.generate_jwt_token(current_app.config['SECRET_KEY'])
+        # ✅ TEMPORARY FIX: Use simple token instead of JWT
+        import secrets
+        token = f"token_{user.id}_{secrets.token_urlsafe(32)}"
         
-        # Create session record
         session = Session(
             user_id=user.id,
             session_token=token,
             ip_address=ip_address,
-            user_agent=request.headers.get('User-Agent', ''),
-            expires_at=datetime.utcnow() + timedelta(days=7)
+            user_agent=request.headers.get('User-Agent', '')[:255],
+            expires_at=datetime.utcnow() + timedelta(days=30)
         )
         db.session.add(session)
         
-        # Log successful login (now relies on final commit)
         log_login_attempt(email, ip_address, True)
-        
-        # FINAL COMMIT: Commit last_login, new session, and successful login attempt together
         db.session.commit()
         
+        print(f"✅ User logged in: {email}")
+        
         return jsonify({
+            'success': True,
             'message': 'Login successful',
             'token': token,
-            'user': user.to_dict()
+            'user': {
+                'id': user.id,
+                'email': user.email,
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+                'full_name': user.full_name,
+                'name': user.full_name,
+                'role': user.role,
+                'department': user.department,
+                'phone': user.phone,
+                'is_active': user.is_active,
+                'is_verified': user.is_verified,
+                'created_at': user.created_at.isoformat() if user.created_at else None,
+                'last_login': user.last_login.isoformat() if user.last_login else None,
+            }
         }), 200
         
     except Exception as e:
         db.session.rollback()
+        print(f"❌ Login error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 @auth_bp.route('/auth/logout', methods=['POST'])
