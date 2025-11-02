@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 from database import db, init_db
 import os
@@ -17,27 +17,37 @@ def create_app():
     app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     
-    # Initialize CORS - Allow all origins for now
+    # ✅ CRITICAL: Initialize CORS BEFORE registering blueprints
     CORS(app, 
          resources={r"/*": {
              "origins": "*",
              "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
              "allow_headers": ["Content-Type", "Authorization"],
              "expose_headers": ["Content-Type", "Authorization"],
-             "supports_credentials": False  # Set to False when using origins="*"
          }})
     
-    # Add manual CORS headers as backup
+    # ✅ CRITICAL: Add explicit OPTIONS handler
+    @app.route('/', defaults={'path': ''}, methods=['OPTIONS'])
+    @app.route('/<path:path>', methods=['OPTIONS'])
+    def handle_options(path):
+        response = jsonify({'status': 'ok'})
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        response.headers['Access-Control-Max-Age'] = '3600'
+        return response, 200
+    
+    # ✅ Add CORS headers to ALL responses
     @app.after_request
     def after_request(response):
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-        response.headers.add('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
         return response
     
     init_db(app)
     
-    # Register blueprints
+    # Register blueprints AFTER CORS setup
     from routes.auth_routes import auth_bp
     from routes.approvals_routes import approvals_bp
     from routes.form_routes import form_bp
@@ -63,7 +73,6 @@ def create_app():
 if __name__ == '__main__':
     app = create_app()
     
-    # Create tables if they don't exist
     with app.app_context():
         db.create_all()
         print("Database tables created successfully!")
