@@ -1,6 +1,6 @@
 import os
 from flask import Blueprint, request, jsonify, current_app, send_file
-from models import db, Customer, CustomerFormData, User, ApprovalNotification
+from backend.models import db, Customer, CustomerFormData, User, ApprovalNotification
 import secrets
 import string
 import json

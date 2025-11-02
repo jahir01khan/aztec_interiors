@@ -6,8 +6,8 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import create_app
-from database import db
-from models import Customer
+from backend.database import db
+from backend.models import Customer
 from sqlalchemy import text
 
 def fix_enum_values():

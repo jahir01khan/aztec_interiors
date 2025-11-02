@@ -1,6 +1,6 @@
 # File: /backend/init_db.py
 from config import app, db
-from models import Customer, Job, CustomerFormData
+from backend.models import Customer, Job, CustomerFormData
 
 def init_database():
     """Initialize the database with all tables"""

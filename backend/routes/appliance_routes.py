@@ -1,7 +1,7 @@
 # routes/appliance_routes.py
 from flask import Blueprint, request, jsonify, current_app
-from database import db
-from models import Product, Brand, ApplianceCategory, DataImport, ProductQuoteItem
+from backend.database import db
+from backend.models import Product, Brand, ApplianceCategory, DataImport, ProductQuoteItem
 from datetime import datetime
 import json
 import pandas as pd

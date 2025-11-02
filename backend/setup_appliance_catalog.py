@@ -1,7 +1,7 @@
 # setup_appliance_catalog.py - Setup script for appliance catalog
 from app import app
-from database import db
-from models import Brand, ApplianceCategory, Product
+from backend.database import db
+from backend.models import Brand, ApplianceCategory, Product
 import json
 
 def setup_appliance_catalog():

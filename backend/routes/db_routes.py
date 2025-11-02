@@ -3,8 +3,8 @@ import json
 from functools import wraps
 # Import current_app for logger access
 from flask import current_app 
-from database import db
-from models import (
+from backend.database import db
+from backend.models import (
     User, Assignment, Customer, CustomerFormData, Fitter, Job, 
     ProductionNotification, Quotation, QuotationItem, Project # Added Project
 )
