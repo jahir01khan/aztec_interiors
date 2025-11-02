@@ -17,14 +17,24 @@ def create_app():
     app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     
-    # Initialize extensions
+    # Initialize CORS - Allow all origins for now
     CORS(app, 
-    supports_credentials=True,
-    origins="*",
-    allow_headers=['Content-Type', 'Authorization'],
-    methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
-)
-
+         resources={r"/*": {
+             "origins": "*",
+             "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+             "allow_headers": ["Content-Type", "Authorization"],
+             "expose_headers": ["Content-Type", "Authorization"],
+             "supports_credentials": False  # Set to False when using origins="*"
+         }})
+    
+    # Add manual CORS headers as backup
+    @app.after_request
+    def after_request(response):
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
+        return response
+    
     init_db(app)
     
     # Register blueprints
@@ -35,7 +45,6 @@ def create_app():
     from routes.notification_routes import notification_bp
     from routes.assignment_routes import assignment_bp
     from routes.appliance_routes import appliance_bp
-    # 💡 FIX: Import the missing customer_bp
     from routes.customer_routes import customer_bp
     from routes.file_routes import file_bp
     
@@ -46,7 +55,6 @@ def create_app():
     app.register_blueprint(notification_bp)
     app.register_blueprint(assignment_bp)
     app.register_blueprint(appliance_bp)
-    # 💡 FIX: Register the missing customer_bp
     app.register_blueprint(customer_bp)
     app.register_blueprint(file_bp)
     
