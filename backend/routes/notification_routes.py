@@ -1,8 +1,8 @@
 # /Users/razataiab/Desktop/aztec_interiors/backend/routes/notification_routes.py
 
 from flask import Blueprint, jsonify, request
-from database import db
-from models import ProductionNotification
+from backend.database import db
+from backend.models import ProductionNotification
 from .auth_helpers import token_required # Import the shared decorator
 from datetime import datetime
 
