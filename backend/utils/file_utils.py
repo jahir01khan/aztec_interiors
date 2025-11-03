@@ -1,9 +1,16 @@
 import base64
 import os
 from werkzeug.utils import secure_filename
-from config import ALLOWED_EXTENSIONS
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Fetch allowed extensions from .env, default to common ones
+ALLOWED_EXTENSIONS = os.getenv("ALLOWED_EXTENSIONS", "pdf,jpg,jpeg,png,gif").split(",")
 
 def allowed_file(filename):
+    """Check if the file extension is allowed"""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def encode_image_to_base64(image_path):
