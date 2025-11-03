@@ -53,7 +53,7 @@ def create_app():
         return response
     
     # ============================================
-    # NO AUTH CHECK - COMPLETELY OPEN FOR TESTING
+    # MOCK AUTH - NO AUTHENTICATION REQUIRED
     # ============================================
     @app.before_request
     def set_mock_user():
@@ -61,13 +61,30 @@ def create_app():
         if request.method == 'OPTIONS':
             return None
             
-        g.user = {
-            'id': 1,
-            'email': 'test@example.com',
-            'first_name': 'Test',
-            'last_name': 'User',
-            'role': 'manager'
-        }
+        # Try to get first real user from database, otherwise use mock
+        from backend.models import User
+        try:
+            first_user = User.query.first()
+            if first_user:
+                g.user = first_user
+            else:
+                g.user = type('User', (), {
+                    'id': 1,
+                    'email': 'dev@test.com',
+                    'first_name': 'Dev',
+                    'last_name': 'User',
+                    'role': 'Manager',
+                    'is_active': True
+                })()
+        except:
+            g.user = type('User', (), {
+                'id': 1,
+                'email': 'dev@test.com',
+                'first_name': 'Dev',
+                'last_name': 'User',
+                'role': 'Manager',
+                'is_active': True
+            })()
         return None
     
     # Initialize database
@@ -111,66 +128,51 @@ if __name__ == '__main__':
         print("🔧 INITIALIZING DATABASE...")
         print("=" * 60)
         
-        # Import all models to ensure they're registered
-        from backend.models import User, Customer, Form, Notification, Assignment, Appliance
-        import bcrypt
+        # Import ALL models to ensure they're registered with SQLAlchemy
+        from backend.models import (
+            User, LoginAttempt, Session, Customer, Project, Team, Fitter, 
+            Salesperson, Job, JobDocument, JobChecklist, ChecklistItem,
+            ScheduleItem, Room, RoomAppliance, JobFormLink, JobNote,
+            ApplianceCategory, Brand, Product, Quotation, QuotationItem,
+            ProductQuoteItem, Invoice, InvoiceLineItem, Payment, CountingSheet,
+            CountingItem, RemedialAction, RemedialItem, DocumentTemplate,
+            AuditLog, VersionedSnapshot, ProductionNotification, FormSubmission,
+            CustomerFormData, ApprovalNotification, DataImport, DrawingDocument,
+            Assignment
+        )
         
-        # Create all tables
+        print("✅ All models imported")
+        
+        # Force create all tables
         db.create_all()
         
-        # Check if tables exist
+        # Verify tables were created
         from sqlalchemy import inspect
         inspector = inspect(db.engine)
         tables = inspector.get_table_names()
         
-        if 'users' not in tables:
-            print("❌ Tables not created! Running emergency setup...")
-            db.drop_all()
-            db.create_all()
+        print(f"\n📋 Created {len(tables)} tables:")
+        for table in sorted(tables):
+            print(f"   ✓ {table}")
+        
+        # Check if users table exists and has data
+        if 'users' in tables:
+            user_count = User.query.count()
+            print(f"\n👤 Users in database: {user_count}")
             
-        print(f"✅ Tables found: {', '.join(tables)}")
-        
-        # Check if admin user exists, create if not
-        admin_user = User.query.filter_by(email='admin@aztecinteriors.com').first()
-        if not admin_user:
-            print("\n👤 Creating default admin user...")
-            admin_password = bcrypt.hashpw('admin123'.encode('utf-8'), bcrypt.gensalt())
-            admin = User(
-                email='admin@aztecinteriors.com',
-                password_hash=admin_password.decode('utf-8'),
-                first_name='Admin',
-                last_name='User',
-                role='manager',
-                is_active=True,
-                is_verified=True
-            )
-            db.session.add(admin)
-            db.session.commit()
-            print("✅ Admin user created: admin@aztecinteriors.com / admin123")
-        
-        # Create the specific user from error message if not exists
-        test_user = User.query.filter_by(email='ayaan.ateeb@gmail.com').first()
-        if not test_user:
-            print("\n👤 Creating test user...")
-            user_password = bcrypt.hashpw('Ayaan#1804'.encode('utf-8'), bcrypt.gensalt())
-            user = User(
-                email='ayaan.ateeb@gmail.com',
-                password_hash=user_password.decode('utf-8'),
-                first_name='Ayaan',
-                last_name='Ateeb',
-                role='manager',
-                is_active=True,
-                is_verified=True
-            )
-            db.session.add(user)
-            db.session.commit()
-            print("✅ Test user created: ayaan.ateeb@gmail.com / Ayaan#1804")
+            if user_count == 0:
+                print("\n⚠️  No users found! Run 'python backend/init_db.py' to create default users")
+            else:
+                users = User.query.all()
+                print("\n✅ Existing users:")
+                for u in users:
+                    print(f"   📧 {u.email} ({u.role})")
+        else:
+            print("\n❌ ERROR: users table was not created!")
+            print("   Please check your models.py file")
         
         print("\n" + "=" * 60)
-        print("✅ Database initialized successfully!")
-        print("✅ CORS enabled - ALL ORIGINS ALLOWED")
-        print("✅ AUTH DISABLED - All requests allowed")
-        print(f"✅ Server starting on port {os.environ.get('PORT', 5000)}")
+        print("✅ Database check complete!")
         print("=" * 60)
     
     # Use proper production server settings
