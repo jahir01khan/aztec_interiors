@@ -1,10 +1,11 @@
 from flask import Blueprint, request, jsonify
-from backend.models import Customer, Project, CustomerFormData, db, User, Job, DrawingDocument 
+from ..models import Customer, Project, CustomerFormData, db, User, Job, DrawingDocument
 from functools import wraps
 from flask import current_app
 import uuid
 from datetime import datetime
 import json
+
 
 customer_bp = Blueprint('customers', __name__)
 

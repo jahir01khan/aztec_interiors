@@ -1,23 +1,23 @@
 from flask import Blueprint, request, jsonify, send_file
 import json
 from functools import wraps
-# Import current_app for logger access
-from flask import current_app 
-from backend.database import db
-from backend.models import (
+from flask import current_app  # for logger access
+from ..database import db
+from ..models import (
     User, Assignment, Customer, CustomerFormData, Fitter, Job, 
-    ProductionNotification, Quotation, QuotationItem, Project # Added Project
+    ProductionNotification, Quotation, QuotationItem, Project
 )
 from datetime import datetime
 import io
-# ReportLab imports kept for context but not used here
+# ReportLab imports
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
-from sqlalchemy.exc import OperationalError # Import for robust error handling
+from sqlalchemy.exc import OperationalError  # robust error handling
+
 
 # Create blueprint
 from .auth_helpers import token_required

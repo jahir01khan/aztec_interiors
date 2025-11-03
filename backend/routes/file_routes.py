@@ -1,16 +1,14 @@
-# 💡 FIX: Import Blueprint and current_app
 from flask import request, jsonify, send_file, Blueprint, current_app
 from werkzeug.utils import secure_filename
 from datetime import datetime
 import os
-import uuid # Needed for unique file names
+import uuid  # Needed for unique file names
 
-# 💡 FIX: Remove config import, as app is provided by the factory
-# from config import app, latest_structured_data
-from utils.file_utils import allowed_file
-from utils.openai_utils import process_image_with_openai_vision
-from models import db, DrawingDocument # NEW: Import database and DrawingDocument model
-from routes.auth_helpers import token_required # Assuming this helper exists for authorization
+from ..utils.file_utils import allowed_file
+from ..vacutils.openai_utils import process_image_with_openai_vision
+from ..models import db, DrawingDocument  # database and model
+from .auth_helpers import token_required  # relative import from the same package
+
 
 try:
     from pdf_generator import generate_pdf

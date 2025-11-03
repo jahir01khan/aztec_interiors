@@ -1,7 +1,7 @@
 import json
 from openai import OpenAI
 from config import FORM_COLUMNS, latest_structured_data
-from utils.file_utils import encode_image_to_base64, get_image_mime_type
+from backend.nutils.file_utils import encode_image_to_base64, get_image_mime_type
 import os
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))

@@ -1,11 +1,12 @@
 from flask import Blueprint, request, jsonify, current_app, g
-from backend.database import db
-from backend.models import User, LoginAttempt, Session
+from ..database import db
+from ..models import User, LoginAttempt, Session
 from datetime import datetime, timedelta
 from functools import wraps
 import secrets
 import re
 import jwt
+
 
 auth_bp = Blueprint('auth', __name__)
 
