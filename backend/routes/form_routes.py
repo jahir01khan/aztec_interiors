@@ -7,8 +7,7 @@ import json
 from datetime import datetime, timedelta
 from io import BytesIO
 from fpdf import FPDF
-from backend.database import get_db_connection
-
+# from backend.database import get_db_connection
 from functools import wraps
 
 form_bp = Blueprint("form", __name__)
@@ -682,7 +681,7 @@ def save_receipt():
         
         # Create approval notification using raw SQL
         try:
-            conn = get_db_connection()
+            conn = get_db.session()
             cursor = conn.cursor()
             
             # Get all managers to notify
