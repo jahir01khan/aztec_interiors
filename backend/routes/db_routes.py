@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify, current_app
 import json
 from datetime import datetime, date # Import date separately for explicit use
-from ..database import SessionLocal # Assuming db is implicitly handled by SessionLocal setup
+from ..db import SessionLocal, Base, engine
 from ..models import (
     User, Assignment, Customer, CustomerFormData, Fitter, Job,
     ProductionNotification, Quotation, QuotationItem, Project
@@ -18,6 +18,28 @@ def get_current_user_email(data=None):
         return request.current_user.email
     # Fallback to 'System' or data.get('created_by') from post body if needed
     return data.get('created_by', 'System') if isinstance(data, dict) else 'System'
+
+
+@db_bp.route('/users', methods=['GET', 'POST'])
+@token_required
+def handle_users():
+    session = SessionLocal()
+    try:
+        if request.method == 'POST':
+            data = request.json
+            user = User(
+                email=data['email'],
+                name=data.get('name', ''),
+                role=data.get('role', 'user'),
+                created_by=get_current_user_email(data)
+            )
+            session.add(user)
+            session.commit()
+            return jsonify({'id': user.id, 'message': 'User created successfully'}), 201
+        users = session.query(User).all()
+        return jsonify([u.to_dict() for u in users])
+    finally:
+        session.close()
 
 # ------------------ CUSTOMERS ------------------
 
