@@ -3,13 +3,10 @@ from werkzeug.utils import secure_filename
 from datetime import datetime
 import os
 import uuid  # Needed for unique file names
-
 from ..utils.file_utils import allowed_file
-# from ..vacutils.openai_utils import process_image_with_openai_vision
-from ..models import db, DrawingDocument  # database and model
-from .auth_helpers import token_required  # relative import from the same package
-
-
+from ..models import DrawingDocument
+from .auth_helpers import token_required  
+ 
 try:
     from pdf_generator import generate_pdf
     from excel_exporter import export_to_excel

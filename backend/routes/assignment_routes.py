@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from ..database import db
-from ..models import db, CustomerFormData, User, Customer, ApprovalNotification
+from ..models import CustomerFormData, User, Customer, ApprovalNotification
 from datetime import datetime
 from ..utils.google_calendar_utils import create_calendar_event, update_calendar_event, delete_calendar_event
 from .auth_routes import token_required

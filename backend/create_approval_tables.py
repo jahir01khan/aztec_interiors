@@ -1,7 +1,6 @@
 # create_approval_table.py
 from backend.app import create_app
 from backend.db import SessionLocal, Base, engine
-
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey
 from sqlalchemy.sql import func
@@ -25,5 +24,5 @@ class ApprovalNotification(Base):
 
 with app.app_context():
     # Bind metadata to your db engine
-    Base.metadata.create_all(bind=db.engine)
+    # Base.metadata.create_all(bind=db.engine)
     print("✅ Approval notifications table created successfully!")

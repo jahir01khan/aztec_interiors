@@ -1,7 +1,6 @@
 from flask import Blueprint, request, jsonify
 from datetime import datetime
-from ..models import db, CustomerFormData, User, Customer, ApprovalNotification
-from functools import wraps
+from ..models import CustomerFormData, User, Customer, ApprovalNotification
 from flask import current_app
 import json
 
