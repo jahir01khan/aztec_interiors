@@ -16,6 +16,20 @@ def create_app():
     app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
 
     # ============================================
+    # ⚙️ DATABASE INITIALIZATION (NEW LOCATION)
+    # ============================================
+    print("🔧 Initializing database schema...")
+    try:
+        # NOTE: This is idempotent; it only creates tables that don't exist.
+        Base.metadata.create_all(bind=engine)
+        # You can add a quick check here if needed, but Base.metadata.create_all is the main step.
+        print("✅ Database schema initialized successfully.")
+    except Exception as e:
+        print(f"❌ Database initialization failed: {e}")
+        # Optionally, raise the exception to stop deployment if schema creation is critical
+        # raise
+
+    # ============================================
     # CORS
     # ============================================
     CORS(
