@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify, current_app, g
-from ..database import db
+# REMOVED: from ..database import db 
+
 from ..models import User, LoginAttempt, Session
 from datetime import datetime, timedelta
 from functools import wraps
@@ -7,6 +8,9 @@ import secrets
 import re
 import jwt
 import os
+
+# 👈 NEW IMPORT: Required for all database write operations
+from ..db import SessionLocal
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -54,6 +58,8 @@ def check_rate_limit(email, max_attempts=5, window_minutes=15):
     
     cutoff_time = datetime.utcnow() - timedelta(minutes=window_minutes)
     
+    # Needs a session for the query, but we don't commit anything. 
+    # Using the implicit query session here, assuming it's configured.
     recent_attempts = LoginAttempt.query.filter(
         LoginAttempt.email == email,
         LoginAttempt.attempted_at > cutoff_time,
@@ -63,21 +69,21 @@ def check_rate_limit(email, max_attempts=5, window_minutes=15):
     return recent_attempts < max_attempts
 
 def log_login_attempt(email, ip_address, success):
-    """Log login attempt"""
+    """Log login attempt (must manage its own session)"""
+    session = SessionLocal()
     try:
         attempt = LoginAttempt(
             email=email,
             ip_address=ip_address,
             success=success
         )
-        session = SessionLocal()
-# ...do stuff...
         session.add(attempt)
         session.commit()
-        session.close()
-        session.add(attempt)
     except Exception as e:
+        session.rollback()
         print(f"Warning: Could not log login attempt: {e}")
+    finally:
+        session.close()
 
 # --- Decorators ---
 
@@ -87,7 +93,7 @@ def token_required(f):
     def decorated(*args, **kwargs):
         # ⚠️ DEV MODE: Accept any token or no token
         if DEV_MODE:
-            # Try to get user from token if provided, otherwise use mock user
+            # Logic remains the same, querying User.query is fine for dev mode.
             token = None
             if 'Authorization' in request.headers:
                 try:
@@ -159,8 +165,8 @@ def token_required(f):
             if not user or not user.is_active:
                 return jsonify({'error': 'User not found or inactive'}), 401
 
-            session = Session.query.filter_by(session_token=token, user_id=user.id).first()
-            if not session or session.expires_at < datetime.utcnow():
+            session_record = Session.query.filter_by(session_token=token, user_id=user.id).first()
+            if not session_record or session_record.expires_at < datetime.utcnow():
                 return jsonify({'error': 'Token expired'}), 401
 
             g.user = user
@@ -203,10 +209,11 @@ def health_check():
 @auth_bp.route('/auth/register', methods=['POST'])
 def register():
     """Register a new user"""
+    session = SessionLocal() # 👈 Start session for transaction
     try:
         data = request.get_json() or {}
 
-        # Validate required fields
+        # ... (Validation remains the same) ...
         required_fields = ['email', 'password', 'first_name', 'last_name']
         for field in required_fields:
             if not data.get(field):
@@ -216,24 +223,21 @@ def register():
         password = data['password']
         first_name = data['first_name'].strip()
         last_name = data['last_name'].strip()
-        role = data.get('role', 'Staff').strip()  # Default to Staff
+        role = data.get('role', 'Staff').strip()
 
-        # Validate email format
         if not validate_email(email):
             return jsonify({'error': 'Invalid email format'}), 400
 
-        # Validate password strength
         is_valid, message = validate_password(password)
         if not is_valid:
             return jsonify({'error': message}), 400
 
-        # Validate role against allowed values (relaxed in dev mode)
         ALLOWED_ROLES = ['Manager', 'HR', 'Sales', 'Production', 'Staff'] 
         if role not in ALLOWED_ROLES:
-            role = 'Staff'  # Default to Staff if invalid
+            role = 'Staff'
 
-        # Check if user already exists
-        if User.query.filter_by(email=email).first():
+        # Check if user already exists (using current session)
+        if session.query(User).filter_by(email=email).first():
             return jsonify({'error': 'Email already registered'}), 409
 
         # Create new user 
@@ -243,29 +247,19 @@ def register():
             last_name=last_name,
             role=role,
             is_active=True,
-            is_verified=True  # Auto-verify in dev mode
+            is_verified=True
         )
         user.set_password(password)
         
         if not DEV_MODE:
             user.generate_verification_token()
 
-        session = SessionLocal()
-# ...do stuff...
         session.add(user)
-        session.commit()
-        session.close()
-        
-        # Log attempt
+        session.commit() # 👈 Commit user creation
+
+        # Log attempt (log_login_attempt manages its own session, but we call it here)
         log_login_attempt(email, get_client_ip(), True)
         
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.commit()
-
         print(f"✅ User registered: {email} as {role}")
 
         return jsonify({
@@ -275,39 +269,31 @@ def register():
         }), 201
 
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
         print(f"❌ Registration error: {e}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        session.close() # 👈 Close session
 
 @auth_bp.route('/auth/login', methods=['POST'])
 def login():
+    session = SessionLocal() # 👈 Start session for transaction
     try:
         data = request.get_json() or {}
         if not data.get('email') or not data.get('password'):
             return jsonify({'error': 'Email and password required'}), 400
 
         email = data['email'].lower().strip()
-        session = SessionLocal()
-        user = session.query(User).filter_by(email=email).first()
-        session.close()
         ip = get_client_ip()
 
         if not check_rate_limit(email):
             return jsonify({'error': 'Too many failed attempts'}), 429
+        
+        # Query user using the active session
+        user = session.query(User).filter_by(email=email).first() 
 
         if not user or not user.check_password(data['password']):
             log_login_attempt(email, ip, False)
-            session = SessionLocal()
-# ...do stuff...
-            session.add(None)
-            session.commit()
-            session.close()
-            session.commit()
             print(f"❌ Login failed for: {email}")
             return jsonify({'error': 'Invalid email or password'}), 401
 
@@ -324,7 +310,7 @@ def login():
         }
         token = jwt.encode(payload, current_app.config['SECRET_KEY'], algorithm='HS256')
 
-        # Save session
+        # Save session record
         session_record = Session(
             user_id=user.id,
             session_token=token,
@@ -332,20 +318,13 @@ def login():
             user_agent=request.headers.get('User-Agent', '')[:255],
             expires_at=datetime.utcnow() + timedelta(days=7)
         )
-        session = SessionLocal()
-# ...do stuff...
+        
+        session.add(user) # Update last_login time
         session.add(session_record)
-        session.commit()
-        session.close()
-        session.add(session_record)
-        log_login_attempt(email, ip, True)
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.commit()
+        session.commit() # 👈 Commit session and last_login update
 
+        log_login_attempt(email, ip, True)
+        
         print(f"✅ Login successful: {email}")
 
         return jsonify({
@@ -355,58 +334,54 @@ def login():
             'user': user.to_dict()
         }), 200
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
         print(f"❌ Login error: {e}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        session.close() # 👈 Close session
 
 @auth_bp.route('/auth/logout', methods=['POST'])
 @token_required
 def logout():
     """Logout user"""
+    session = SessionLocal() # 👈 Start session for transaction
     try:
         if DEV_MODE:
             return jsonify({'message': 'Logged out successfully (dev mode)'}), 200
         
         token = request.headers.get('Authorization').split(" ")[1]
-        session_record = Session.query.filter_by(session_token=token).first()
+        
+        # Find session record using the current session
+        session_record = session.query(Session).filter_by(session_token=token).first()
+        
         if session_record:
-            session = SessionLocal()
-# ...do stuff...
-            session.add(session_record)
-            session.commit()
-            session.close()
             session.delete(session_record)
-            session = SessionLocal()
-# ...do stuff...
-            session.add(None)
-            session.commit()
-            session.close()
-            session.commit()
+            session.commit() # 👈 Commit deletion
         
         return jsonify({'message': 'Logged out successfully'}), 200
         
     except Exception as e:
+        session.rollback() # 👈 Rollback on error
+        current_app.logger.exception(f"Error logging out: {e}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        session.close() # 👈 Close session
 
 @auth_bp.route('/auth/me', methods=['GET'])
 @token_required
 def get_current_user():
     """Get current user information"""
+    # This is a read-only endpoint, relies on g.user set by token_required decorator
     try:
-        return jsonify({
-            'user': g.user.to_dict() if hasattr(g.user, 'to_dict') else {
-                'id': g.user.id,
-                'email': g.user.email,
-                'first_name': g.user.first_name,
-                'last_name': g.user.last_name,
-                'role': g.user.role
-            }
-        }), 200
+        # Use g.user, which is generally a session-managed object
+        user_data = g.user.to_dict() if hasattr(g.user, 'to_dict') else {
+            'id': g.user.id,
+            'email': g.user.email,
+            'first_name': g.user.first_name,
+            'last_name': g.user.last_name,
+            'role': g.user.role
+        }
+        return jsonify({'user': user_data}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     
@@ -414,6 +389,7 @@ def get_current_user():
 @admin_required
 def get_staff_users():
     """Get all staff users"""
+    # Read-only endpoint
     try:
         staff_roles = ['Sales', 'Production', 'Staff']
         staff_users = User.query.filter(User.role.in_(staff_roles)).order_by(User.first_name).all()
@@ -427,14 +403,20 @@ def get_staff_users():
 @token_required
 def refresh_token():
     """Refresh JWT token"""
+    session = SessionLocal() # 👈 Start session for transaction
     try:
+        user = g.user
+        
         if DEV_MODE:
+             # Dev mode refresh is read-only
             return jsonify({
                 'token': 'mock-jwt-token-123',
-                'user': g.user.to_dict() if hasattr(g.user, 'to_dict') else {}
+                'user': user.to_dict() if hasattr(user, 'to_dict') else {}
             }), 200
         
-        user = g.user
+        # PRODUCTION MODE
+        
+        # 1. Generate new token
         payload = {
             'user_id': user.id,
             'exp': datetime.utcnow() + timedelta(days=7),
@@ -442,17 +424,15 @@ def refresh_token():
         }
         new_token = jwt.encode(payload, current_app.config['SECRET_KEY'], algorithm='HS256')
         
+        # 2. Find old session record using the active session
         old_token = request.headers.get('Authorization').split(" ")[1]
-        session_record = Session.query.filter_by(session_token=old_token).first()
+        session_record = session.query(Session).filter_by(session_token=old_token).first()
+
+        # 3. Update session record
         if session_record:
             session_record.session_token = new_token
             session_record.expires_at = datetime.utcnow() + timedelta(days=7)
-            session = SessionLocal()
-# ...do stuff...
-            session.add(session_record)
-            session.commit()
-            session.close()
-            session.commit()
+            session.commit() # 👈 Commit update
         
         return jsonify({
             'token': new_token,
@@ -460,17 +440,16 @@ def refresh_token():
         }), 200
         
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
+        current_app.logger.exception(f"Error refreshing token: {e}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        session.close() # 👈 Close session
 
 @auth_bp.route('/auth/forgot-password', methods=['POST'])
 def forgot_password():
     """Request password reset"""
+    session = SessionLocal() # 👈 Start session for transaction
     try:
         data = request.get_json()
         
@@ -478,18 +457,12 @@ def forgot_password():
             return jsonify({'error': 'Email is required'}), 400
         
         email = data['email'].lower().strip()
-        session = SessionLocal()
-        user = session.query(User).filter_by(email=email).first()
-        session.close()
+        user = session.query(User).filter_by(email=email).first() # Query using active session
         
         if user:
-            reset_token = user.generate_reset_token()
-            session = SessionLocal()
-# ...do stuff...
+            reset_token = user.generate_reset_token() # Updates user object
             session.add(user)
-            session.commit()
-            session.close()
-            session.commit()
+            session.commit() # 👈 Commit token save
             print(f"Password reset token for {email}: {reset_token}")
         
         return jsonify({
@@ -497,17 +470,16 @@ def forgot_password():
         }), 200
         
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
+        current_app.logger.exception(f"Error requesting password reset: {e}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        session.close() # 👈 Close session
 
 @auth_bp.route('/auth/reset-password', methods=['POST'])
 def reset_password():
     """Reset password with token"""
+    session = SessionLocal() # 👈 Start session for transaction
     try:
         data = request.get_json()
         
@@ -523,7 +495,8 @@ def reset_password():
         if not is_valid:
             return jsonify({'error': message}), 400
         
-        user = User.query.filter(
+        # Query user using the active session
+        user = session.query(User).filter(
             User.reset_token == token,
             User.reset_token_expires > datetime.utcnow()
         ).first()
@@ -535,28 +508,23 @@ def reset_password():
         user.reset_token = None
         user.reset_token_expires = None
         
-        session = SessionLocal()
-# ...do stuff...
         session.add(user)
-        session.commit()
-        session.close()
-        session.commit()
+        session.commit() # 👈 Commit password change
         
         return jsonify({'message': 'Password reset successful'}), 200
         
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
+        current_app.logger.exception(f"Error resetting password: {e}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        session.close() # 👈 Close session
 
 @auth_bp.route('/auth/change-password', methods=['POST'])
 @token_required
 def change_password():
     """Change password for authenticated user"""
+    session = SessionLocal() # 👈 Start session for transaction
     try:
         data = request.get_json()
         
@@ -567,7 +535,11 @@ def change_password():
         
         current_password = data['current_password']
         new_password = data['new_password']
-        user = g.user
+        user = g.user # User is fetched by token_required, but may need re-attaching/fetching within session
+        
+        # Re-fetch user in the current session context if necessary, or just use g.user if it's still valid/attached
+        # Since g.user is typically from an external session (JWT verification), let's ensure it's managed by this new session:
+        user = session.merge(user)
         
         if not user.check_password(current_password):
             return jsonify({'error': 'Current password is incorrect'}), 400
@@ -579,28 +551,22 @@ def change_password():
         user.set_password(new_password)
         user.updated_at = datetime.utcnow()
         
-        session = SessionLocal()
-# ...do stuff...
-        session.add(user)
-        session.commit()
-        session.close()
-        session.commit()
+        session.commit() # 👈 Commit password change
         
         return jsonify({'message': 'Password changed successfully'}), 200
         
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
+        current_app.logger.exception(f"Error changing password: {e}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        session.close() # 👈 Close session
 
 @auth_bp.route('/auth/users', methods=['GET'])
 @admin_required
 def get_users():
     """Get all users"""
+    # Read-only endpoint
     try:
         users = User.query.order_by(User.created_at.desc()).all()
         return jsonify({
@@ -613,16 +579,17 @@ def get_users():
 @admin_required
 def toggle_user_status(user_id):
     """Toggle user active status"""
+    session = SessionLocal() # 👈 Start session for transaction
     try:
-        user = User.query.get_or_404(user_id)
+        # Get user using the active session
+        user = session.get(User, user_id)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+            
         user.is_active = not user.is_active
         user.updated_at = datetime.utcnow()
-        session = SessionLocal()
-# ...do stuff...
-        session.add(user)
-        session.commit()
-        session.close()
-        session.commit()
+        
+        session.commit() # 👈 Commit status toggle
         
         return jsonify({
             'message': f'User {"activated" if user.is_active else "deactivated"} successfully',
@@ -630,10 +597,8 @@ def toggle_user_status(user_id):
         }), 200
         
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
-        return jsonify({'error': str(e)}), 500
+        session.rollback() # 👈 Rollback on error
+        current_app.logger.exception(f"Error toggling user status: {e}")
+        return jsonify({'error': 'Failed to toggle user status'}), 500
+    finally:
+        session.close() # 👈 Close session

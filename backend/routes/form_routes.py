@@ -1,13 +1,14 @@
 import os
 from flask import Blueprint, request, jsonify, current_app, send_file
-from ..models import db, Customer, CustomerFormData, User, ApprovalNotification
+from ..models import Customer, CustomerFormData, User, ApprovalNotification
 import secrets
 import string
 import json
 from datetime import datetime, timedelta
 from io import BytesIO
 from fpdf import FPDF
-from ..db import get_db_connection  # relative import
+# REMOVED: from ..db import get_db_connection 
+from ..db import SessionLocal # 👈 NEW IMPORT: Required for database write operations
 from functools import wraps
 
 
@@ -20,7 +21,7 @@ def generate_secure_token(length=32):
     alphabet = string.ascii_letters + string.digits
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
-# Token authentication decorator
+# Token authentication decorator (Relies on User.verify_jwt_token which handles its session)
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -74,6 +75,7 @@ def manager_required(f):
 
 class PDF(FPDF):
     def header(self):
+        # ... (PDF header logic remains the same) ...
         logo_path = r"C:\Users\ayaan\Techmynt Solutions\aztec-interior\public\images\logo.png"
         logo_width = 18
         text_margin_x = 3
@@ -113,6 +115,7 @@ class PDF(FPDF):
             self.ln(5)
             
     def footer(self):
+        # ... (PDF footer logic remains the same) ...
         self.set_y(-25)
         self.set_font('Arial', 'B', 8)
         self.cell(0, 5, 'Aztec Interiors (Leicester) Ltd', 0, 1, 'C')
@@ -163,7 +166,7 @@ def get_pending_approvals():
                 'receipt_number': form_data.get('receiptType'),
                 'customer_name': customer.name if customer else form_data.get('customerName', 'N/A'),
                 'total_amount': form_data.get('totalAmount') or form_data.get('paidAmount'),
-                'created_by': creator.get_full_name() if creator else 'Unknown',
+                'created_by': creator.full_name if creator else 'Unknown', # Corrected call
                 'created_at': submission.submitted_at.isoformat()
             }
             all_pending.append(pending_item)
@@ -182,6 +185,7 @@ def approve_document():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
+    session = SessionLocal() # 👈 Start session
     try:
         data = request.get_json()
         document_id = data.get('documentId')
@@ -189,7 +193,7 @@ def approve_document():
         if not document_id:
             return jsonify({'error': 'Missing document ID'}), 400
         
-        submission = CustomerFormData.query.get(document_id)
+        submission = session.get(CustomerFormData, document_id)
         if not submission:
             return jsonify({'error': 'Document not found'}), 404
         
@@ -208,24 +212,16 @@ def approve_document():
             f"Document {document_id} ({doc_type}) approved by manager {request.current_user.id}"
         )
         
-        session = SessionLocal()
-# ...do stuff...
-        session.add(submission)
-        session.commit()
-        session.close()
-        session.commit()
+        session.commit() # 👈 Commit transaction
         
         return jsonify({'success': True, 'message': 'Document approved successfully'}), 200
         
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
         current_app.logger.exception(f"Error approving document: {e}")
         return jsonify({'error': 'Failed to approve document'}), 500
+    finally:
+        session.close() # 👈 Close session
 
 @form_bp.route('/approvals/reject', methods=['POST', 'OPTIONS'])
 @token_required
@@ -235,6 +231,7 @@ def reject_document():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
+    session = SessionLocal() # 👈 Start session
     try:
         data = request.get_json()
         document_id = data.get('documentId')
@@ -246,7 +243,7 @@ def reject_document():
         if not reason.strip():
             return jsonify({'error': 'Rejection reason is required'}), 400
         
-        submission = CustomerFormData.query.get(document_id)
+        submission = session.get(CustomerFormData, document_id)
         if not submission:
             return jsonify({'error': 'Document not found'}), 404
         
@@ -266,24 +263,16 @@ def reject_document():
             f"Document {document_id} ({doc_type}) rejected by manager {request.current_user.id}. Reason: {reason}"
         )
         
-        session = SessionLocal()
-# ...do stuff...
-        session.add(submission)
-        session.commit()
-        session.close()
-        session.commit()
+        session.commit() # 👈 Commit transaction
         
         return jsonify({'success': True, 'message': 'Document rejected'}), 200
         
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
         current_app.logger.exception(f"Error rejecting document: {e}")
         return jsonify({'error': 'Failed to reject document'}), 500
+    finally:
+        session.close() # 👈 Close session
 
 @form_bp.route('/approvals/status/<int:document_id>', methods=['GET', 'OPTIONS'])
 @token_required
@@ -323,7 +312,7 @@ def download_invoice_pdf():
         if not data:
             return jsonify({'error': 'Missing invoice data.'}), 400
 
-        # Check approval status
+        # Check approval status (read-only query)
         submission_id = data.get('submission_id')
         if submission_id:
             submission = CustomerFormData.query.get(submission_id)
@@ -333,6 +322,7 @@ def download_invoice_pdf():
                     'status': submission.approval_status
                 }), 403
 
+        # ... (PDF generation logic remains the same) ...
         pdf = PDF('P', 'mm', 'A4')
         pdf.doc_title = 'Invoice'
         pdf.alias_nb_pages()
@@ -434,7 +424,7 @@ def download_invoice_pdf():
         Y_LIMIT = 297 - 35
         y_safe_start = Y_LIMIT - 30
         if pdf.get_y() > y_safe_start: 
-             pdf.set_y(y_safe_start)
+              pdf.set_y(y_safe_start)
         pdf.ln(2) 
         pdf.set_font('Arial', 'B', 10)
         pdf.set_xy(10, pdf.get_y()) 
@@ -467,6 +457,7 @@ def save_invoice():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
 
+    session = SessionLocal() # 👈 Start session
     try:
         data = request.get_json(silent=True) or {}
         customer_id = data.get('customerId')
@@ -474,7 +465,7 @@ def save_invoice():
         if not customer_id:
             return jsonify({'error': 'Missing customer ID'}), 400
             
-        customer = Customer.query.get(customer_id)
+        customer = session.get(Customer, customer_id)
         if not customer:
             return jsonify({'error': 'Customer not found'}), 404
             
@@ -491,23 +482,14 @@ def save_invoice():
             created_by=request.current_user.id
         )
         
-        session = SessionLocal()
-# ...do stuff...
         session.add(customer_form_data)
-        session.commit()
-        session.close()
-
-        session = SessionLocal()
-# ...do stuff...
-        session.add(customer_form_data)
-        session.commit()
-        session.close()
-        session.flush()  # Get the ID without committing
+        # Flush to get the ID for notifications without committing yet
+        session.flush() 
         
-        # Create approval notification using SQLAlchemy ORM instead of raw SQL
+        # Create approval notification
         try:
-            # Get all managers to notify
-            managers = User.query.filter(
+            # Get all managers to notify (using the current session)
+            managers = session.query(User).filter(
                 User.role.in_(['Manager', 'HR']),
                 User.is_active == True
             ).all()
@@ -522,15 +504,10 @@ def save_invoice():
                     document_type='invoice',
                     document_id=customer_form_data.id,
                     status='pending',
-                    message=f'New invoice #{data.get("invoiceNumber", "N/A")} from {request.current_user.get_full_name()} requires approval. Customer: {customer.name}, Amount: £{data.get("totalAmount", 0):,.2f}',
+                    message=f'New invoice #{data.get("invoiceNumber", "N/A")} from {request.current_user.full_name} requires approval. Customer: {customer.name}, Amount: £{data.get("totalAmount", 0):,.2f}',
                     created_at=datetime.utcnow(),
                     is_read=False
                 )
-                session = SessionLocal()
-# ...do stuff...
-                session.add(notification)
-                session.commit()
-                session.close()
                 session.add(notification)
             
             current_app.logger.info(
@@ -542,13 +519,7 @@ def save_invoice():
             current_app.logger.error(f"Error creating approval notifications: {e}")
             # Continue anyway - invoice was saved even if notifications failed
         
-        # Commit the main transaction (includes invoice + notifications)
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.commit()
+        session.commit() # 👈 Commit the main transaction (invoice + notifications)
 
         return jsonify({
             "success": True,
@@ -558,21 +529,18 @@ def save_invoice():
         }), 200
 
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
         current_app.logger.exception(f"Error saving invoice: {e}")
         return jsonify({"error": f"Failed to save invoice: {str(e)}"}), 500
+    finally:
+        session.close() # 👈 Close session
     
 # ------------------------------------------------------------------------
 # ROUTE: RECEIPT PDF DOWNLOAD
 # ------------------------------------------------------------------------
 @form_bp.route('/receipts/download-pdf', methods=['POST', 'OPTIONS'])
 def download_receipt_pdf():
-    """Generates a PDF receipt based on form data (Updated with Gray Theme)."""
+    # ... (PDF generation logic remains the same) ...
     if request.method == 'OPTIONS':
         return jsonify({}), 200
         
@@ -698,6 +666,7 @@ def save_receipt():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
 
+    session = SessionLocal() # 👈 Start session
     try:
         data = request.get_json(silent=True) or {}
         customer_id = data.get('customerId')
@@ -705,7 +674,7 @@ def save_receipt():
         if not customer_id:
             return jsonify({'error': 'Missing customer ID'}), 400
             
-        customer = Customer.query.get(customer_id)
+        customer = session.get(Customer, customer_id)
         if not customer:
             return jsonify({'error': 'Customer not found, cannot save receipt'}), 404
             
@@ -722,71 +691,43 @@ def save_receipt():
             created_by=request.current_user.id
         )
         
-        session = SessionLocal()
-# ...do stuff...
         session.add(customer_form_data)
-        session.commit()
-        session.close()
-
-        session = SessionLocal()
-# ...do stuff...
-        session.add(customer_form_data)
-        session.commit()
-        session.close()
-        session.flush()
+        session.flush() # Flush to get the ID for notifications without committing yet
         
-        # Create approval notification using raw SQL
+        # Create approval notification using SQLAlchemy ORM (replacing raw SQL)
         try:
-            conn = get_session = SessionLocal()
-# ...do stuff...
-            session.add(None)
-            session.commit()
-            session.close()
-            cursor = conn.cursor()
-            
-            # Get all managers to notify
-            cursor.execute("""
-                SELECT id, email, first_name, last_name 
-                FROM users 
-                WHERE role IN ('Manager', 'HR') AND is_active = 1
-            """)
-            managers = cursor.fetchall()
+            # Get all managers to notify (using the current session)
+            managers = session.query(User).filter(
+                User.role.in_(['Manager', 'HR']),
+                User.is_active == True
+            ).all()
             
             if not managers:
                 current_app.logger.warning("No active managers found to notify!")
             
             # Create notifications for all managers
-            notification_count = 0
             for manager in managers:
-                cursor.execute("""
-                    INSERT INTO approval_notifications 
-                    (user_id, document_type, document_id, status, message, created_at, is_read)
-                    VALUES (?, 'receipt', ?, 'pending', ?, datetime('now'), 0)
-                """, (
-                    manager['id'],
-                    customer_form_data.id,
-                    f'New receipt ({data.get("receiptType", "Payment")}) from {request.current_user.get_full_name()} requires approval. Customer: {customer.name}, Amount: £{data.get("paidAmount", 0):,.2f}'
-                ))
-                notification_count += 1
-            
-            conn.commit()
-            cursor.close()
-            conn.close()
+                notification = ApprovalNotification(
+                    user_id=manager.id,
+                    document_type='receipt',
+                    document_id=customer_form_data.id,
+                    status='pending',
+                    message=f'New receipt ({data.get("receiptType", "Payment")}) from {request.current_user.full_name} requires approval. Customer: {customer.name}, Amount: £{data.get("paidAmount", 0):,.2f}',
+                    created_at=datetime.utcnow(),
+                    is_read=False
+                )
+                session.add(notification)
             
             current_app.logger.info(
                 f"Receipt saved for customer {customer_id}. ID: {customer_form_data.id}. "
-                f"Status: pending. Notified {notification_count} managers."
+                f"Status: pending. Notified {len(managers)} managers."
             )
             
         except Exception as e:
             current_app.logger.error(f"Error creating approval notifications: {e}")
+            # Continue anyway - receipt was saved even if notifications failed
         
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.commit()
+        session.commit() # 👈 Commit the main transaction (receipt + notifications)
 
         return jsonify({
             "success": True,
@@ -796,14 +737,11 @@ def save_receipt():
         }), 200
 
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
         current_app.logger.exception(f"Error saving receipt: {e}")
         return jsonify({"error": f"Failed to save receipt: {str(e)}"}), 500
+    finally:
+        session.close() # 👈 Close session
 
 
 # ------------------------------------------------------------------------
@@ -812,7 +750,7 @@ def save_receipt():
 
 @form_bp.route('/checklists/download-pdf', methods=['POST', 'OPTIONS'])
 def download_checklist_pdf():
-    """Generates PDF on the server using fpdf2 (Updated with Gray Theme)."""
+    # ... (PDF generation logic remains the same) ...
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     try:
@@ -962,13 +900,14 @@ def save_checklist():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
 
+    session = SessionLocal() # 👈 Start session
     try:
         data = request.get_json(silent=True) or {}
         checklist_type = data.get('checklistType', 'unknown')
         customer_id = data.get('customerId')
         customer_name = data.get('customerName', 'N/A')
 
-        customer = Customer.query.get(customer_id)
+        customer = session.get(Customer, customer_id)
         if not customer:
             return jsonify({'error': 'Customer not found, cannot save checklist'}), 404
             
@@ -979,18 +918,8 @@ def save_checklist():
             submitted_at=datetime.utcnow()
         )
         
-        session = SessionLocal()
-# ...do stuff...
         session.add(customer_form_data)
-        session.commit()
-        session.close()
-
-        session = SessionLocal()
-# ...do stuff...
-        session.add(customer_form_data)
-        session.commit()
-        session.close()
-        session.commit()
+        session.commit() # 👈 Commit transaction
         
         current_app.logger.info(f"Staff checklist '{checklist_type}' saved for customer {customer_id} ({customer_name}). ID: {customer_form_data.id}")
 
@@ -1000,18 +929,15 @@ def save_checklist():
         }), 200
 
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
         current_app.logger.exception(f"Error saving internal checklist: {e}")
         return jsonify({"error": f"Failed to save checklist: {str(e)}"}), 500
+    finally:
+        session.close() # 👈 Close session
 
 @form_bp.route('/customers/<customer_id>/generate-form-link', methods=['POST', 'OPTIONS'])
 def generate_customer_form_link(customer_id):
-    """Generate form link for specific customer"""
+    """Generate form link for specific customer (In-memory token generation)"""
     if request.method == 'OPTIONS':
         return jsonify({}), 200
 
@@ -1056,6 +982,7 @@ def generate_customer_form_link(customer_id):
 
 @form_bp.route('/validate-form-token/<token>', methods=['GET', 'OPTIONS'])
 def validate_form_token(token):
+    # ... (Token validation logic remains the same) ...
     if request.method == 'OPTIONS':
         return jsonify({}), 200
 
@@ -1090,6 +1017,7 @@ def submit_customer_form():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
 
+    session = SessionLocal() # 👈 Start session
     try:
         data = request.get_json(silent=True) or {}
         token = data.get('token')
@@ -1100,6 +1028,7 @@ def submit_customer_form():
 
         customer_id = None
         
+        # --- 1. Handle Token Validation & Usage ---
         if token:
             current_app.logger.debug(f"Processing token-based submission with token: {token}")
             
@@ -1118,21 +1047,23 @@ def submit_customer_form():
             customer_id = token_data.get('customer_id')
             
             if customer_id:
-                customer = Customer.query.get(customer_id)
+                customer = session.get(Customer, customer_id) # Use session.get()
                 if not customer:
                     return jsonify({'success': False, 'error': 'Associated customer not found'}), 404
                 
                 form_tokens[token]['used'] = True
                 current_app.logger.info(f"Token {token} marked as used for customer {customer_id}")
         
+        # --- 2. Handle Direct Customer ID or New Customer Creation ---
         if not customer_id:
             customer_id = form_data.get('customer_id') or request.args.get('customerId')
             
             if customer_id:
-                customer = Customer.query.get(customer_id)
+                customer = session.get(Customer, customer_id) # Use session.get()
                 if not customer:
                     return jsonify({'success': False, 'error': 'Specified customer not found'}), 404
             else:
+                # Create NEW customer
                 customer_name = (form_data.get('customer_name') or '').strip()
                 customer_address = (form_data.get('customer_address') or '').strip()
                 
@@ -1149,76 +1080,45 @@ def submit_customer_form():
                     status='New Lead',
                     created_by='Form Submission'
                 )
-                session = SessionLocal()
-# ...do stuff...
                 session.add(customer)
-                session.commit()
-                session.close()
-                session.add(customer)
-                session = SessionLocal()
-# ...do stuff...
-                session.add(customer)
-                session.commit()
-                session.close()
-                session.flush()
+                session.flush() # Flush to get customer ID
                 customer_id = customer.id
                 current_app.logger.info(f"Created new customer {customer_id} from form submission")
 
-        try:
-            customer_form_data = CustomerFormData(
-                customer_id=customer_id,
-                form_data=json.dumps(form_data),
-                token_used=token or '',
-                submitted_at=datetime.utcnow()
-            )
-            session = SessionLocal()
-# ...do stuff...
-            session.add(customer_form_data)
-            session.commit()
-            session.close()
+        # --- 3. Save Form Submission ---
+        
+        customer_form_data = CustomerFormData(
+            customer_id=customer_id,
+            form_data=json.dumps(form_data),
+            token_used=token or '',
+            submitted_at=datetime.utcnow()
+        )
+        session.add(customer_form_data)
+        session.commit() # 👈 Commit transaction
+        
+        final_customer = session.get(Customer, customer_id)
+        customer_name = final_customer.name if final_customer else 'Customer'
+        
+        current_app.logger.info(f"Single form submission created for customer {customer_id}")
 
-            session = SessionLocal()
-# ...do stuff...
-            session.add(customer_form_data)
-            session.commit()
-            session.close()
-            session.commit()
-            
-            final_customer = Customer.query.get(customer_id)
-            customer_name = final_customer.name if final_customer else 'Customer'
-            
-            current_app.logger.info(f"Single form submission created for customer {customer_id}")
-
-            return jsonify({
-                'success': True,
-                'customer_id': customer_id,
-                'form_submission_id': customer_form_data.id,
-                'message': f'Form submitted successfully for {customer_name}'
-            }), 201
-
-        except Exception as e:
-            session = SessionLocal()
-# ...do stuff...
-            session.add(None)
-            session.commit()
-            session.close()
-            session.rollback()
-            current_app.logger.exception(f"Database error during form submission for customer {customer_id}")
-            raise e
+        return jsonify({
+            'success': True,
+            'customer_id': customer_id,
+            'form_submission_id': customer_form_data.id,
+            'message': f'Form submitted successfully for {customer_name}'
+        }), 201
 
     except Exception as e:
-        current_app.logger.exception("Form submission failed")
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
+        current_app.logger.exception(f"Database error during form submission for customer {customer_id}")
         return jsonify({'success': False, 'error': f'Form submission failed: {str(e)}'}), 500
+    finally:
+        session.close() # 👈 Close session
+
 
 @form_bp.route('/generate-form-link', methods=['POST', 'OPTIONS'])
 def generate_form_link():
-    """Legacy endpoint - generates token not tied to specific customer"""
+    """Legacy endpoint - generates token not tied to specific customer (In-memory token generation)"""
     if request.method == 'OPTIONS':
         return jsonify({}), 200
 
@@ -1248,6 +1148,7 @@ def generate_form_link():
 
 @form_bp.route('/cleanup-expired-tokens', methods=['POST', 'OPTIONS'])
 def cleanup_expired_tokens():
+    # ... (Cleanup logic remains the same as it doesn't touch the DB) ...
     if request.method == 'OPTIONS':
         return jsonify({}), 200
 
@@ -1270,29 +1171,23 @@ def cleanup_expired_tokens():
 def delete_form_submission(submission_id):
     """
     Delete a form submission and its related approval notifications.
-    Fixed to handle the NOT NULL constraint on approval_notifications.document_id
+    Fixed to ensure related notifications are deleted within the transaction.
     """
+    session = SessionLocal() # 👈 Start session
     try:
-        # Get the form submission
-        submission = CustomerFormData.query.get_or_404(submission_id)
+        # Get the form submission using the active session
+        submission = session.get(CustomerFormData, submission_id)
+        if not submission:
+            return jsonify({'error': 'Form submission not found'}), 404
         
-        # ✅ FIX: Delete related approval notifications FIRST before deleting the submission
-        # This prevents the NOT NULL constraint error
-        ApprovalNotification.query.filter_by(document_id=submission_id).delete()
-        
+        # Delete related approval notifications (Cascade might handle this, but explicit delete is safer)
+        # Note: If the model has cascade='all, delete-orphan' defined, this line might be redundant
+        # or cause issues if the session delete happens first. We'll rely on the model or explicit delete.
+        session.query(ApprovalNotification).filter_by(document_id=submission_id).delete(synchronize_session='fetch')
+
         # Now safely delete the form submission
-        session = SessionLocal()
-# ...do stuff...
-        session.add(submission)
-        session.commit()
-        session.close()
         session.delete(submission)
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.commit()
+        session.commit() # 👈 Commit transaction
         
         return jsonify({
             'message': 'Form submission deleted successfully',
@@ -1300,13 +1195,10 @@ def delete_form_submission(submission_id):
         }), 200
         
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
-        print(f"[ERROR] Failed to delete form submission {submission_id}: {str(e)}")
+        session.rollback() # 👈 Rollback on error
+        current_app.logger.exception(f"Failed to delete form submission {submission_id}: {e}")
         return jsonify({
             'error': f'Failed to delete form submission: {str(e)}'
         }), 500
+    finally:
+        session.close() # 👈 Close session

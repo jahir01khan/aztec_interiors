@@ -1,15 +1,18 @@
 from flask import Blueprint, request, jsonify
-from ..models import Customer, Project, CustomerFormData, db, User, Job, DrawingDocument
+from ..models import Customer, Project, CustomerFormData, User, Job, DrawingDocument # Removed 'db' from imports
 from functools import wraps
 from flask import current_app
 import uuid
 from datetime import datetime
 import json
 
+# 👈 NEW IMPORT: Required for all database write operations
+from ..db import SessionLocal 
+
 
 customer_bp = Blueprint('customers', __name__)
 
-# Token authentication decorator
+# Token authentication decorator (left unchanged as it relies on User.verify_jwt_token)
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -71,6 +74,7 @@ def create_customer():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
+    session = SessionLocal() # 👈 Start session
     try:
         data = request.get_json()
         
@@ -99,18 +103,8 @@ def create_customer():
             created_by=request.current_user.id
         )
         
-        session = SessionLocal()
-# ...do stuff...
         session.add(new_customer)
-        session.commit()
-        session.close()
-
-        session = SessionLocal()
-# ...do stuff...
-        session.add(new_customer)
-        session.commit()
-        session.close()
-        session.commit()
+        session.commit() # 👈 Commit transaction
         
         current_app.logger.info(f"Customer {new_customer.id} created by user {request.current_user.id}")
         
@@ -121,14 +115,11 @@ def create_customer():
         }), 201
         
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
         current_app.logger.exception(f"Error creating customer: {e}")
         return jsonify({'error': f'Failed to create customer: {str(e)}'}), 500
+    finally:
+        session.close() # 👈 Close session
 
 
 @customer_bp.route('/customers/<string:customer_id>', methods=['GET', 'OPTIONS'])
@@ -143,11 +134,9 @@ def get_customer(customer_id):
         
         # Check access permissions
         if request.current_user.role == 'Sales':
-            # Sales can only view customers they created or are assigned to
             if customer.created_by != request.current_user.id and customer.salesperson != request.current_user.get_full_name():
                 return jsonify({'error': 'You do not have permission to view this customer'}), 403
         elif request.current_user.role == 'Staff':
-            # Staff can only view customers they created or are assigned to
             if customer.created_by != request.current_user.id and customer.salesperson != request.current_user.get_full_name():
                 return jsonify({'error': 'You do not have permission to view this customer'}), 403
         
@@ -166,12 +155,16 @@ def update_customer(customer_id):
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
+    session = SessionLocal() # 👈 Start session
     try:
-        customer = Customer.query.get_or_404(customer_id)
+        # Use session.get() to attach object to the transaction
+        customer = session.get(Customer, customer_id)
+        if not customer:
+            return jsonify({'error': 'Customer not found'}), 404
         
         # Check permissions
         if request.current_user.role == 'Sales':
-            if customer.created_by != request.current_user.id and customer.salesperson != request.current_user.get_full_name():
+            if customer.created_by != session.get(User, request.current_user.id).id and customer.salesperson != session.get(User, request.current_user.id).full_name:
                 return jsonify({'error': 'You do not have permission to edit this customer'}), 403
         
         data = request.get_json()
@@ -201,28 +194,23 @@ def update_customer(customer_id):
         customer.updated_by = request.current_user.id
         customer.updated_at = datetime.utcnow()
         
-        session = SessionLocal()
-# ...do stuff...
-        session.add(customer)
-        session.commit()
-        session.close()
-        session.commit()
+        session.commit() # 👈 Commit transaction
+        
+        # Re-fetch the dictionary representation after commit
+        customer_dict = customer.to_dict(include_projects=True)
         
         return jsonify({
             'success': True,
             'message': 'Customer updated successfully',
-            'customer': customer.to_dict(include_projects=True)
+            'customer': customer_dict
         }), 200
         
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
         current_app.logger.exception(f"Error updating customer {customer_id}: {e}")
         return jsonify({'error': f'Failed to update customer: {str(e)}'}), 500
+    finally:
+        session.close() # 👈 Close session
 
 
 @customer_bp.route('/customers/<string:customer_id>', methods=['DELETE', 'OPTIONS'])
@@ -232,12 +220,15 @@ def delete_customer(customer_id):
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
+    session = SessionLocal() # 👈 Start session
     try:
         # Only Manager and HR can delete
         if request.current_user.role not in ['Manager', 'HR']:
             return jsonify({'error': 'You do not have permission to delete customers'}), 403
         
-        customer = Customer.query.get_or_404(customer_id)
+        customer = session.get(Customer, customer_id)
+        if not customer:
+            return jsonify({'error': 'Customer not found'}), 404
         
         # Check if customer has projects - warn if they do
         if customer.projects:
@@ -245,18 +236,8 @@ def delete_customer(customer_id):
                 'error': f'Cannot delete customer with {len(customer.projects)} project(s). Delete projects first.'
             }), 400
         
-        session = SessionLocal()
-# ...do stuff...
-        session.add(customer)
-        session.commit()
-        session.close()
         session.delete(customer)
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.commit()
+        session.commit() # 👈 Commit deletion
         
         current_app.logger.info(f"Customer {customer_id} deleted by user {request.current_user.id}")
         
@@ -266,14 +247,11 @@ def delete_customer(customer_id):
         }), 200
         
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
         current_app.logger.exception(f"Error deleting customer {customer_id}: {e}")
         return jsonify({'error': 'Failed to delete customer'}), 500
+    finally:
+        session.close() # 👈 Close session
 
 
 # ==========================================
@@ -307,20 +285,19 @@ def get_customer_projects(customer_id):
 @customer_bp.route('/customers/<string:customer_id>/projects', methods=['POST', 'OPTIONS'])
 @token_required
 def create_project(customer_id):
-    """
-    Create a new project for a customer.
-    
-    🔥 FIXED: Stop conditional stage sync on creation as it causes overwrites.
-    """
+    """Create a new project for a customer."""
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
+    session = SessionLocal() # 👈 Start session
     try:
-        customer = Customer.query.get_or_404(customer_id)
+        customer = session.get(Customer, customer_id)
+        if not customer:
+            return jsonify({'error': 'Customer not found'}), 404
         
         # Check permissions
         if request.current_user.role in ['Sales', 'Staff']:
-            if customer.created_by != request.current_user.id and customer.salesperson != request.current_user.get_full_name():
+            if customer.created_by != session.get(User, request.current_user.id).id and customer.salesperson != session.get(User, request.current_user.id).full_name:
                 return jsonify({'error': 'You do not have permission to create projects for this customer'}), 403
         
         data = request.get_json()
@@ -344,31 +321,23 @@ def create_project(customer_id):
             created_by=request.current_user.id
         )
         
-        session = SessionLocal()
-# ...do stuff...
         session.add(new_project)
-        session.commit()
-        session.close()
+        session.commit() # 👈 Commit the new project first
         
         # --- CRITICAL FIX 1: SIMPLIFY STAGE SYNC ON CREATION ---
+        # NOTE: After commit, we must use fresh queries for count unless the session is closed and reopened.
+        # Since we are keeping the session open, use session queries (or a utility that handles this)
         
-        # Count existing linked entities. We must commit the new project first to get a true count of ALL linked entities.
-        # However, to avoid a race condition, we check the database for pre-existing entities (committed ones).
-        existing_project_count = Project.query.filter_by(customer_id=customer_id).count()
-        existing_job_count = Job.query.filter_by(customer_id=customer_id).count()
-                                   
-        # If the combined count is ZERO, this new project is the FIRST entity, so sync the customer's overall stage.
-        if existing_project_count == 0 and existing_job_count == 0 and new_project.stage:
+        # We need a clean query for the counts, which .query.count() provides easily.
+        existing_project_count = session.query(Project).filter_by(customer_id=customer_id).count()
+        existing_job_count = session.query(Job).filter_by(customer_id=customer_id).count()
+        
+        # If the combined count is 1 (meaning only the new project exists), sync customer stage.
+        if existing_project_count == 1 and existing_job_count == 0 and new_project.stage:
             customer.stage = new_project.stage
-            
-        # --- END CRITICAL FIX 1 ---
+            session.commit() # Commit customer stage change
         
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.commit()
+        # --- END CRITICAL FIX 1 ---
         
         current_app.logger.info(f"Project {new_project.id} created for customer {customer_id} by user {request.current_user.id}")
         
@@ -379,14 +348,11 @@ def create_project(customer_id):
         }), 201
         
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
         current_app.logger.exception(f"Error creating project for customer {customer_id}: {e}")
         return jsonify({'error': f'Failed to create project: {str(e)}'}), 500
+    finally:
+        session.close() # 👈 Close session
 
 
 @customer_bp.route('/projects/<string:project_id>', methods=['GET', 'OPTIONS'])
@@ -415,21 +381,23 @@ def get_project(project_id):
 @customer_bp.route('/projects/<string:project_id>', methods=['PUT', 'OPTIONS'])
 @token_required
 def update_project(project_id):
-    """
-    Update a project (Used by frontend drag-and-drop/edit).
-    
-    🔥 CRITICAL FIX 2: Stop conditional stage update on PUT to prevent multi-project stage issues.
-    """
+    """Update a project."""
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
+    session = SessionLocal() # 👈 Start session
     try:
-        project = Project.query.get_or_404(project_id)
+        # Get project and customer using the active session
+        project = session.get(Project, project_id)
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
+            
         customer = project.customer
         
         # Check permissions
         if request.current_user.role in ['Sales', 'Staff']:
-            if customer.created_by != request.current_user.id and customer.salesperson != request.current_user.get_full_name():
+            # Using session.get() to safely check user properties if needed
+            if customer.created_by != session.get(User, request.current_user.id).id and customer.salesperson != session.get(User, request.current_user.id).full_name:
                 return jsonify({'error': 'You do not have permission to edit this project'}), 403
         
         data = request.get_json()
@@ -455,9 +423,8 @@ def update_project(project_id):
         
         # Count existing linked entities (Projects + Jobs)
         # We must exclude the current project being updated from the count 
-        # to correctly check if it is the ONLY remaining entity.
-        total_other_linked_entities = Project.query.filter(Project.customer_id==customer.id, Project.id != project_id).count() + \
-                                      Job.query.filter_by(customer_id=customer.id).count()
+        total_other_linked_entities = session.query(Project).filter(Project.customer_id==customer.id, Project.id != project_id).count() + \
+                                      session.query(Job).filter_by(customer_id=customer.id).count()
         
         # If the stage changed AND there are NO other entities, sync the customer's overall stage.
         if 'stage' in data and project.stage != old_stage and total_other_linked_entities == 0:
@@ -465,12 +432,7 @@ def update_project(project_id):
             
         # --- END CRITICAL FIX 2 ---
         
-        session = SessionLocal()
-# ...do stuff...
-        session.add(project)
-        session.commit()
-        session.close()
-        session.commit()
+        session.commit() # 👈 Commit transaction
         
         current_app.logger.info(f"Project {project_id} updated by user {request.current_user.id}")
         
@@ -481,14 +443,11 @@ def update_project(project_id):
         }), 200
         
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
         current_app.logger.exception(f"Error updating project {project_id}: {e}")
         return jsonify({'error': f'Failed to update project: {str(e)}'}), 500
+    finally:
+        session.close() # 👈 Close session
 
 
 @customer_bp.route('/projects/<string:project_id>', methods=['DELETE', 'OPTIONS'])
@@ -498,26 +457,35 @@ def delete_project(project_id):
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
+    session = SessionLocal() # 👈 Start session
     try:
         # Only Manager and HR can delete
         if request.current_user.role not in ['Manager', 'HR']:
             return jsonify({'error': 'You do not have permission to delete projects'}), 403
         
-        project = Project.query.get_or_404(project_id)
+        project = session.get(Project, project_id)
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
         
-        session = SessionLocal()
-# ...do stuff...
-        session.add(project)
-        session.commit()
-        session.close()
+        # Determine if this is the last project/job for the customer before deleting
+        customer_id = project.customer_id
+        
         session.delete(project)
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.commit()
+        session.commit() # 👈 Commit deletion
         
+        # --- POST-DELETE CUSTOMER STAGE SYNC ---
+        # After deletion, check if the customer has any remaining projects or jobs.
+        remaining_projects_count = session.query(Project).filter_by(customer_id=customer_id).count()
+        remaining_jobs_count = session.query(Job).filter_by(customer_id=customer_id).count()
+        
+        if remaining_projects_count == 0 and remaining_jobs_count == 0:
+             # If nothing remains, reset customer stage to 'Lead' or similar default
+             customer = session.get(Customer, customer_id)
+             if customer:
+                 customer.stage = 'Lead' 
+                 session.commit()
+        # --- END POST-DELETE SYNC ---
+
         current_app.logger.info(f"Project {project_id} deleted by user {request.current_user.id}")
         
         return jsonify({
@@ -526,14 +494,11 @@ def delete_project(project_id):
         }), 200
         
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
         current_app.logger.exception(f"Error deleting project {project_id}: {e}")
         return jsonify({'error': 'Failed to delete project'}), 500
+    finally:
+        session.close() # 👈 Close session
 
 
 # ==========================================
@@ -603,27 +568,20 @@ def delete_drawing_document(drawing_id):
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
+    session = SessionLocal() # 👈 Start session
     try:
         # Permission check
         if request.current_user.role not in ['Manager', 'HR']:
             return jsonify({'error': 'You do not have permission to delete documents'}), 403
         
-        drawing = DrawingDocument.query.get_or_404(drawing_id)
+        drawing = session.get(DrawingDocument, drawing_id)
+        if not drawing:
+            return jsonify({'error': 'Document not found'}), 404
         
         # NOTE: In a real app, you must **delete the actual file** from S3/disk here
         
-        session = SessionLocal()
-# ...do stuff...
-        session.add(drawing)
-        session.commit()
-        session.close()
         session.delete(drawing)
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.commit()
+        session.commit() # 👈 Commit deletion
         
         current_app.logger.info(f"Drawing document {drawing_id} deleted by user {request.current_user.id}")
         
@@ -633,14 +591,11 @@ def delete_drawing_document(drawing_id):
         }), 200
         
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
         current_app.logger.exception(f"Error deleting drawing document {drawing_id}: {e}")
         return jsonify({'error': 'Failed to delete drawing document'}), 500
+    finally:
+        session.close() # 👈 Close session
 
 
 # ==========================================
@@ -653,11 +608,12 @@ def submit_form():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
+    session = SessionLocal() # 👈 Start session
     try:
         data = request.get_json()
         token = data.get('token')
         customer_id = data.get('customer_id')
-        project_id = data.get('project_id')  # REQUIRED: project_id must be provided
+        project_id = data.get('project_id') 
         
         if not token:
             return jsonify({'error': 'Token is required'}), 400
@@ -667,12 +623,12 @@ def submit_form():
             return jsonify({'error': 'Project ID is required'}), 400
         
         # Validate customer exists
-        customer = Customer.query.get(customer_id)
+        customer = session.get(Customer, customer_id)
         if not customer:
             return jsonify({'error': 'Customer not found'}), 404
         
         # Validate project exists and belongs to customer
-        project = Project.query.get(project_id)
+        project = session.get(Project, project_id)
         if not project:
             return jsonify({'error': 'Project not found'}), 404
         if project.customer_id != customer_id:
@@ -687,18 +643,8 @@ def submit_form():
             submitted_at=datetime.utcnow()
         )
         
-        session = SessionLocal()
-# ...do stuff...
         session.add(form_submission)
-        session.commit()
-        session.close()
-
-        session = SessionLocal()
-# ...do stuff...
-        session.add(form_submission)
-        session.commit()
-        session.close()
-        session.commit()
+        session.commit() # 👈 Commit transaction
         
         current_app.logger.info(f"Form submitted for project {project_id}")
         
@@ -709,11 +655,8 @@ def submit_form():
         }), 201
         
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
         current_app.logger.exception(f"Error submitting form: {e}")
         return jsonify({'error': f'Failed to submit form: {str(e)}'}), 500
+    finally:
+        session.close() # 👈 Close session

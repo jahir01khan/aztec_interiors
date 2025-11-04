@@ -6,6 +6,9 @@ from ..models import CustomerFormData, User, Customer, ApprovalNotification
 from flask import current_app
 import json
 
+# 👈 NEW IMPORT: Necessary for database write operations
+from ..db import SessionLocal 
+
 approvals_bp = Blueprint('approvals', __name__)
 
 # Token authentication decorator
@@ -65,6 +68,7 @@ def get_pending_approvals():
         return jsonify({}), 200
     
     try:
+        # Note: CustomerFormData.query is OK for simple reads (if configured via scoped_session/base query)
         pending_submissions = CustomerFormData.query.filter_by(
             approval_status='pending'
         ).order_by(CustomerFormData.submitted_at.desc()).all()
@@ -110,6 +114,7 @@ def approve_document():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
+    session = SessionLocal() # 👈 Start session
     try:
         data = request.get_json()
         document_id = data.get('documentId')
@@ -117,7 +122,8 @@ def approve_document():
         if not document_id:
             return jsonify({'error': 'Missing document ID'}), 400
         
-        submission = CustomerFormData.query.get(document_id)
+        # Use the active session to query the database
+        submission = session.get(CustomerFormData, document_id) 
         if not submission:
             return jsonify({'error': 'Document not found'}), 404
         
@@ -136,24 +142,17 @@ def approve_document():
             f"Document {document_id} ({doc_type}) approved by manager {request.current_user.id}"
         )
         
-        session = SessionLocal()
-# ...do stuff...
-        session.add(submission)
-        session.commit()
-        session.close()
-        session.commit()
+        # session.add(submission) # Not strictly needed if object is attached to session
+        session.commit() # 👈 Commit transaction
         
         return jsonify({'success': True, 'message': 'Document approved successfully'}), 200
         
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
         current_app.logger.exception(f"Error approving document: {e}")
         return jsonify({'error': 'Failed to approve document'}), 500
+    finally:
+        session.close() # 👈 Close session
 
 # Reject a document
 @approvals_bp.route('/approvals/reject', methods=['POST', 'OPTIONS'])
@@ -163,6 +162,7 @@ def reject_document():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
+    session = SessionLocal() # 👈 Start session
     try:
         data = request.get_json()
         document_id = data.get('documentId')
@@ -174,7 +174,8 @@ def reject_document():
         if not reason.strip():
             return jsonify({'error': 'Rejection reason is required'}), 400
         
-        submission = CustomerFormData.query.get(document_id)
+        # Use the active session to query the database
+        submission = session.get(CustomerFormData, document_id) 
         if not submission:
             return jsonify({'error': 'Document not found'}), 404
         
@@ -194,21 +195,14 @@ def reject_document():
             f"Document {document_id} ({doc_type}) rejected by manager {request.current_user.id}. Reason: {reason}"
         )
         
-        session = SessionLocal()
-# ...do stuff...
-        session.add(submission)
-        session.commit()
-        session.close()
-        session.commit()
+        # session.add(submission) # Not strictly needed if object is attached to session
+        session.commit() # 👈 Commit transaction
         
         return jsonify({'success': True, 'message': 'Document rejected'}), 200
         
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback()
+        session.rollback() # 👈 Rollback on error
         current_app.logger.exception(f"Error rejecting document: {e}")
         return jsonify({'error': 'Failed to reject document'}), 500
+    finally:
+        session.close() # 👈 Close session

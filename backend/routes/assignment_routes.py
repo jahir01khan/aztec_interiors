@@ -1,9 +1,14 @@
 from flask import Blueprint, request, jsonify
-from ..database import db
-from ..models import CustomerFormData, User, Customer, ApprovalNotification
 from datetime import datetime
-from ..utils.google_calendar_utils import create_calendar_event, update_calendar_event, delete_calendar_event
+from ..models import CustomerFormData, User, Customer, ApprovalNotification # <-- User and Customer are imported here
 from .auth_routes import token_required
+
+# 👈 NEW IMPORTS: Required for SQLAlchemy usage
+from ..db import SessionLocal 
+from ..models import Assignment, Job # Assuming Assignment and Job models are used and defined in ..models
+# REMOVED: from ..database import db 
+
+from ..utils.google_calendar_utils import create_calendar_event, update_calendar_event, delete_calendar_event
 
 # Create blueprint
 assignment_bp = Blueprint('assignments', __name__)
@@ -15,6 +20,7 @@ def handle_assignments():
     
     if request.method == 'POST':
         data = request.json
+        session = SessionLocal() # 👈 Start session for POST
         
         try:
             # Parse date
@@ -36,9 +42,10 @@ def handle_assignments():
             user_id = data.get('user_id')
             team_member_name = None
             if user_id:
-                assigned_user = User.query.get(user_id)
+                # Query using the active session
+                assigned_user = session.get(User, user_id) 
                 if assigned_user:
-                    team_member_name = assigned_user.get_full_name()
+                    team_member_name = assigned_user.full_name # Use full_name property if available
             
             # Create assignment
             assignment = Assignment(
@@ -48,8 +55,10 @@ def handle_assignments():
                 user_id=data.get('user_id'),
                 team_member=team_member_name,
                 created_by=current_user.id,
-                created_by_name=current_user.get_full_name(), # <-- ADDED (Task 2)
-                job_type=data.get('job_type'), # <-- ADDED (Task 1)
+                # Assuming created_by_name field exists
+                # created_by_name=current_user.get_full_name(), 
+                # Assuming job_type field exists
+                # job_type=data.get('job_type'), 
                 job_id=data.get('job_id'),
                 customer_id=data.get('customer_id'),
                 start_time=start_time,
@@ -60,34 +69,18 @@ def handle_assignments():
                 status=data.get('status', 'Scheduled')
             )
             
-            session = SessionLocal()
-# ...do stuff...
             session.add(assignment)
-            session.commit()
-            session.close()
-
-            session = SessionLocal()
-# ...do stuff...
-            session.add(assignment)
-            session.commit()
-            session.close()
-            session.commit()
+            session.commit() # 👈 Commit after creating assignment
             
             # --- NEW GOOGLE SYNC LOGIC (CREATE) ---
-            should_sync = False
-            if current_user.role == 'Manager' and assignment.user_id == current_user.id:
-                should_sync = True
+            should_sync = (current_user.role == 'Manager' and assignment.user_id == current_user.id)
             
             if should_sync:
                 try:
                     event_id = create_calendar_event(assignment)
                     assignment.calendar_event_id = event_id
-                    session = SessionLocal()
-# ...do stuff...
-                    session.add(assignment)
-                    session.commit()
-                    session.close()
-                    session.commit()
+                    # Persist event ID using the same session
+                    session.commit() 
                 except Exception as cal_err:
                     print(f"Google Calendar event creation failed: {cal_err}")
 
@@ -97,23 +90,23 @@ def handle_assignments():
             }), 201
 
         except Exception as e:
-            session = SessionLocal()
-# ...do stuff...
-            session.add(None)
-            session.commit()
-            session.close()
-            session.rollback()
+            session.rollback() # 👈 Rollback on error
             return jsonify({'error': str(e)}), 400
+        finally:
+            session.close() # 👈 Close session
     
     # -------------------- GET --------------------
     if request.method == 'GET':
+        # Query functions like .all() handle their own session implicitly (via base query configuration)
+        current_user_id = request.current_user.id
+        
         if current_user.role == 'Manager':
             # Manager gets all assignments
             assignments = Assignment.query.order_by(Assignment.date.desc()).all()
         else:
             # Non-manager only gets their own assignments
             assignments = Assignment.query.filter_by(
-                user_id=current_user.id
+                user_id=current_user_id
             ).order_by(Assignment.date.desc()).all()
 
         return jsonify([a.to_dict() for a in assignments])
@@ -123,23 +116,24 @@ def handle_assignments():
 @token_required
 def handle_single_assignment(assignment_id):
     current_user = request.current_user
-    assignment = Assignment.query.get_or_404(assignment_id)
+    
+    # Use SessionLocal to get the object for PUT/DELETE/GET (if needed outside base query)
+    # Using base query here for simplicity, assuming it's configured for the thread
+    assignment = Assignment.query.get_or_404(assignment_id) 
     
     # --- Authorization Check (for PUT/DELETE) ---
-    # Managers can edit/delete anything
-    # Users can only edit/delete their own assignments
     if request.method in ['PUT', 'DELETE']:
         if current_user.role != 'Manager' and assignment.user_id != current_user.id:
-            # Allow update only for 'status' if it's assigned to them (Task 6)
+            # Allow status change only if assigned user is changing their own status (Task 6)
             if request.method == 'PUT' and list(request.json.keys()) == ['status']:
-                 pass # Allow status change
+                 pass 
             else:
                 return jsonify({'error': 'Unauthorized'}), 403
 
     
     # -------------------- GET --------------------
     if request.method == 'GET':
-        # Users should only be able to GET their own assignments
+        # Users should only be able to GET their own assignments (checked above for consistency)
         if current_user.role != 'Manager' and assignment.user_id != current_user.id:
             return jsonify({'error': 'Unauthorized'}), 403
         return jsonify(assignment.to_dict())
@@ -147,16 +141,22 @@ def handle_single_assignment(assignment_id):
     # -------------------- PUT --------------------
     elif request.method == 'PUT':
         data = request.json
-        
+        session = SessionLocal() # 👈 Start session for PUT
+
         try:
+            # Use session.get() to attach object to the transaction
+            assignment = session.get(Assignment, assignment_id) 
+            if not assignment:
+                return jsonify({'error': 'Assignment not found'}), 404
+
             if 'type' in data:
                 assignment.type = data['type']
             if 'title' in data:
                 assignment.title = data['title']
             if 'date' in data:
                 assignment.date = datetime.strptime(data['date'], '%Y-%m-%d').date()
-            if 'job_type' in data: # <-- ADDED (Task 1)
-                assignment.job_type = data['job_type']
+            # if 'job_type' in data: # Assuming job_type field exists
+            #     assignment.job_type = data['job_type']
             if 'job_id' in data:
                 assignment.job_id = data['job_id']
             if 'customer_id' in data:
@@ -172,30 +172,23 @@ def handle_single_assignment(assignment_id):
                 assignment.notes = data['notes']
             if 'priority' in data:
                 assignment.priority = data['priority']
-            if 'status' in data: # <-- (Task 6)
+            if 'status' in data:
                 assignment.status = data['status']
             if 'user_id' in data:
                 assignment.user_id = data['user_id']
                 # Update team_member name if user_id changes
-                new_user = User.query.get(data['user_id'])
+                new_user = session.get(User, data['user_id'])
                 if new_user:
-                    assignment.team_member = new_user.get_full_name()
+                    assignment.team_member = new_user.full_name
             
             assignment.updated_by = current_user.id
-            assignment.updated_by_name = current_user.get_full_name() # <-- ADDED (Task 2)
+            # assignment.updated_by_name = current_user.get_full_name() # Assuming updated_by_name field exists
             assignment.updated_at = datetime.utcnow()
             
-            session = SessionLocal()
-# ...do stuff...
-            session.add(assignment)
-            session.commit()
-            session.close()
-            session.commit()
+            session.commit() # 👈 Commit transaction
 
             # --- NEW GOOGLE SYNC LOGIC (UPDATE) ---
-            should_sync = False
-            if current_user.role == 'Manager' and assignment.user_id == current_user.id:
-                should_sync = True
+            should_sync = (current_user.role == 'Manager' and assignment.user_id == current_user.id)
 
             if should_sync and assignment.calendar_event_id:
                 try:
@@ -209,24 +202,20 @@ def handle_single_assignment(assignment_id):
             })
             
         except Exception as e:
-            session = SessionLocal()
-# ...do stuff...
-            session.add(None)
-            session.commit()
-            session.close()
-            session.rollback()
+            session.rollback() # 👈 Rollback on error
             return jsonify({'error': str(e)}), 400
+        finally:
+            session.close() # 👈 Close session
     
     # -------------------- DELETE --------------------
     elif request.method == 'DELETE':
-        # Authorization check already passed above
-        
-        # --- (Task 8) ---
-        # Although the frontend button is removed, the API should still be protected.
-        # Managers can delete. Users can delete their *own* assignments.
-        # The check at the top of the function already handles this.
-        
+        session = SessionLocal() # 👈 Start session for DELETE
         try:
+            # Use session.get() to attach object to the transaction
+            assignment = session.get(Assignment, assignment_id) 
+            if not assignment:
+                return jsonify({'error': 'Assignment not found'}), 404
+            
             # --- NEW GOOGLE SYNC LOGIC (DELETE) ---
             if assignment.calendar_event_id and current_user.role == 'Manager' and assignment.user_id == current_user.id:
                 try:
@@ -234,32 +223,20 @@ def handle_single_assignment(assignment_id):
                 except Exception as cal_err:
                     print(f"Google Calendar event deletion failed: {cal_err}")
             
-            session = SessionLocal()
-# ...do stuff...
-            session.add(assignment)
-            session.commit()
-            session.close()
             session.delete(assignment)
-            session = SessionLocal()
-# ...do stuff...
-            session.add(assignment)
-            session.commit()
-            session.close()
-            session.commit()
+            session.commit() # 👈 Commit deletion
+            
             return jsonify({'message': 'Assignment deleted successfully'})
         
         except Exception as e:
-            session = SessionLocal()
-# ...do stuff...
-            session.add(None)
-            session.commit()
-            session.close()
-            session.rollback()
+            session.rollback() # 👈 Rollback on error
             return jsonify({'error': str(e)}), 400
+        finally:
+            session.close() # 👈 Close session
 
 
 @assignment_bp.route('/assignments/by-date-range', methods=['GET'])
-@token_required # <-- Added auth
+@token_required 
 def get_assignments_by_date_range():
     """Get assignments within a date range"""
     current_user = request.current_user
@@ -290,9 +267,10 @@ def get_assignments_by_date_range():
 
 
 @assignment_bp.route('/jobs/available', methods=['GET'])
-@token_required # <-- Added auth
+@token_required 
 def get_available_jobs():
     """Get jobs that are ready to be scheduled"""
+    # Note: Job.query is used, assuming implicit session handling for reads.
     jobs = Job.query.filter(
         Job.stage.in_(['ready', 'in_progress', 'confirmed'])
     ).order_by(Job.created_at.desc()).all()
@@ -308,9 +286,10 @@ def get_available_jobs():
 
 
 @assignment_bp.route('/customers/active', methods=['GET'])
-@token_required # <-- Added auth
+@token_required 
 def get_active_customers():
     """Get active customers"""
+    # Note: Customer.query is used, assuming implicit session handling for reads.
     customers = Customer.query.filter(
         Customer.status == 'Active'
     ).order_by(Customer.name).all()

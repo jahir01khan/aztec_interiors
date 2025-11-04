@@ -1,6 +1,9 @@
 # routes/appliance_routes.py
 from flask import Blueprint, request, jsonify, current_app
-from ..database import db
+# REMOVED: from ..database import db # <-- THIS CAUSED THE IMPORT ERROR
+from sqlalchemy import or_ # IMPORTED 'or_' for use in filtering
+from ..db import SessionLocal # IMPORTED SessionLocal for database transactions
+
 from ..models import Product, Brand, ApplianceCategory, DataImport, ProductQuoteItem
 from datetime import datetime
 import json
@@ -54,8 +57,12 @@ def process_import_file(app, import_id, file_path, import_type):
     It now handles the complex pivoted format for 'appliance_matrix'.
     """
     with app.app_context():
-        import_record = DataImport.query.get(import_id)
+        # NOTE: Using SessionLocal here to manage connections in a thread
+        session = SessionLocal()
+        import_record = session.get(DataImport, import_id)
+        
         if not import_record:
+            session.close()
             return
 
         processed_count = 0
@@ -86,21 +93,14 @@ def process_import_file(app, import_id, file_path, import_type):
                     if brand_name != "Unknown":
                         break
                 
-                brand = Brand.query.filter_by(name=brand_name).first()
+                brand = session.query(Brand).filter_by(name=brand_name).first()
                 if not brand:
                     brand = Brand(name=brand_name, active=True)
-                    session = SessionLocal()
-# ...do stuff...
                     session.add(brand)
+                    # Commit brand to get ID outside of main product loop
                     session.commit()
-                    session.close()
-
-                    session = SessionLocal()
-# ...do stuff...
-                    session.add(brand)
-                    session.commit()
-                    session.close()
-                    # Commit brand to get ID
+                # Refresh session record
+                brand = session.query(Brand).filter_by(name=brand_name).first()
 
                 # 2. Reload DataFrame with correct header (row 5, index 4)
                 if file_path.endswith(('.xlsx', '.xls')):
@@ -117,24 +117,18 @@ def process_import_file(app, import_id, file_path, import_type):
                             continue # Skip empty spacer rows
 
                         # Get or create Category
-                        category = ApplianceCategory.query.filter_by(name=product_name_category).first()
+                        category = session.query(ApplianceCategory).filter_by(name=product_name_category).first()
                         if not category:
                             category = ApplianceCategory(name=product_name_category, active=True)
-                            session = SessionLocal()
-# ...do stuff...
                             session.add(category)
-                            session.commit()
-                            session.close()
-
-                            session = SessionLocal()
-# ...do stuff...
-                            session.add(category)
-                            session.commit()
-                            session.close()
                             # Commit category to get ID
+                            session.commit()
+                        # Refresh session record
+                        category = session.query(ApplianceCategory).filter_by(name=product_name_category).first()
+
 
                         # Helper to process a single product entry
-                        def process_entry(model_codes_str, series, price, tier):
+                        def process_entry(model_codes_str, series, price, tier, current_session):
                             entry_processed_count = 0
                             if pd.isna(model_codes_str) or str(model_codes_str).strip() == '':
                                 return 0
@@ -142,7 +136,7 @@ def process_import_file(app, import_id, file_path, import_type):
                             model_codes = [mc.strip() for mc in str(model_codes_str).split('/') if mc.strip()]
                             
                             for model_code in model_codes:
-                                product = Product.query.filter_by(model_code=model_code).first()
+                                product = current_session.query(Product).filter_by(model_code=model_code).first()
                                 if not product:
                                     product = Product(
                                         model_code=model_code,
@@ -152,11 +146,7 @@ def process_import_file(app, import_id, file_path, import_type):
                                         active=True,
                                         in_stock=True
                                     )
-                                    session = SessionLocal()
-# ...do stuff...
-                                    session.add(product)
-                                    session.commit()
-                                    session.close()
+                                    current_session.add(product)
                                 
                                 product.brand_id = brand.id
                                 product.category_id = category.id
@@ -176,32 +166,23 @@ def process_import_file(app, import_id, file_path, import_type):
                                     # Set base price to lowest found tier price
                                     if product.base_price is None or (numeric_price < product.base_price):
                                         product.base_price = numeric_price
-                                
+                                        
                                 entry_processed_count += 1
                             return entry_processed_count
 
                         # Process LOW tier (cols 1, 2, 3)
-                        processed_count += process_entry(row.iloc[1], row.iloc[2], row.iloc[3], 'low')
+                        processed_count += process_entry(row.iloc[1], row.iloc[2], row.iloc[3], 'low', session)
                         
                         # Process MID tier (cols 5, 6, 7)
-                        processed_count += process_entry(row.iloc[5], row.iloc[6], row.iloc[7], 'mid')
+                        processed_count += process_entry(row.iloc[5], row.iloc[6], row.iloc[7], 'mid', session)
                         
                         # Process HIGH tier (cols 9, 10, 11)
-                        processed_count += process_entry(row.iloc[9], row.iloc[10], row.iloc[11], 'high')
+                        processed_count += process_entry(row.iloc[9], row.iloc[10], row.iloc[11], 'high', session)
                         
-                        session = SessionLocal()
-# ...do stuff...
-                        session.add(None) # Changed to None as placeholder for what's added in process_entry
+                        # Commit after each row (batch of 1-3 products)
                         session.commit()
-                        session.close()
-                        session.commit() # Commit after each row (batch of 1-3 products)
 
                     except Exception as row_e:
-                        session = SessionLocal()
-# ...do stuff...
-                        session.add(None)
-                        session.commit()
-                        session.close()
                         session.rollback()
                         failed_count += 1
                         error_log.append(f"Row {index + 6}: {str(row_e)}") # +6 = 1-based index + 5 header rows
@@ -220,40 +201,19 @@ def process_import_file(app, import_id, file_path, import_type):
                 
                 for index, row in df.iterrows():
                     try:
-                        # This logic is a placeholder based on your UI and KBB file
-                        # This example does NOT import KBB data as products
-                        # It is here to prevent the import from failing
-                        
                         code = row.get('code')
                         if pd.isna(code):
                             continue # Skip empty rows
                         
-                        # This is where you would add logic to import KBB data
-                        # For now, we'll just count it as "processed"
-                        
-                        # Example:
-                        # item_name = row.get('description_carcas_only')
-                        # price = pd.to_numeric(row.get('2025_price'), errors='coerce')
-                        # if item_name and price:
-                        #     print(f"Would import KBB item: {item_name} @ {price}")
+                        # (KBB processing logic goes here)
                         
                         processed_count += 1
                         
                     except Exception as row_e:
-                        session = SessionLocal()
-# ...do stuff...
-                        session.add(None)
-                        session.commit()
-                        session.close()
                         session.rollback()
                         failed_count += 1
                         error_log.append(f"Row {index + 4}: {str(row_e)}") # +4 = 1-based + 3 header rows
                 
-                session = SessionLocal()
-# ...do stuff...
-                session.add(None)
-                session.commit()
-                session.close()
                 session.commit()
 
             # --- Import finished, update the job status ---
@@ -261,26 +221,19 @@ def process_import_file(app, import_id, file_path, import_type):
             import_record.records_processed = processed_count
             import_record.records_failed = failed_count
             import_record.error_log = "\n".join(error_log)
+            session.commit()
             
         except Exception as e:
             # Fatal error (e.g., file read error)
-            session = SessionLocal()
-# ...do stuff...
-            session.add(None)
-            session.commit()
-            session.close()
             session.rollback()
             import_record.status = 'failed'
             import_record.error_log = f"Fatal Error: {str(e)}"
+            session.commit()
         
         finally:
             import_record.completed_at = datetime.utcnow()
-            session = SessionLocal()
-# ...do stuff...
-            session.add(import_record)
             session.commit()
             session.close()
-            session.commit()
 
 # Product endpoints
 @appliance_bp.route('/products', methods=['GET'])
@@ -310,7 +263,7 @@ def get_products():
         if search:
             search_filter = f"%{search}%"
             query = query.filter(
-                db.or_(
+                or_( # Changed db.or_ to or_
                     Product.name.ilike(search_filter),
                     Product.model_code.ilike(search_filter),
                     Product.series.ilike(search_filter)
@@ -356,6 +309,7 @@ def get_products():
             }
         })
     except Exception as e:
+        current_app.logger.error(f"Error fetching products: {e}")
         return jsonify({'error': str(e)}), 500
 
 @appliance_bp.route('/products/<int:product_id>', methods=['GET'])
@@ -370,6 +324,7 @@ def get_product(product_id):
 @appliance_bp.route('/products', methods=['POST'])
 def create_product():
     """Create a new product"""
+    session = SessionLocal()
     try:
         data = request.get_json()
         
@@ -377,10 +332,12 @@ def create_product():
         required_fields = ['model_code', 'name', 'brand_id', 'category_id']
         for field in required_fields:
             if not data.get(field):
+                session.close()
                 return jsonify({'error': f'{field} is required'}), 400
         
         # Check if model code already exists
-        if Product.query.filter_by(model_code=data['model_code']).first():
+        if session.query(Product).filter_by(model_code=data['model_code']).first():
+            session.close()
             return jsonify({'error': 'Model code already exists'}), 400
         
         # Create product
@@ -407,34 +364,29 @@ def create_product():
             lead_time_weeks=data.get('lead_time_weeks')
         )
         
-        session = SessionLocal()
-# ...do stuff...
         session.add(product)
         session.commit()
-        session.close()
-
-        session = SessionLocal()
-# ...do stuff...
-        session.add(product)
-        session.commit()
-        session.close()
-        session.commit()
+        product_dict = serialize_product(product)
         
-        return jsonify(serialize_product(product)), 201
+        return jsonify(product_dict), 201
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
         session.rollback()
+        current_app.logger.exception(f"Error creating product: {e}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
 
 @appliance_bp.route('/products/<int:product_id>', methods=['PUT'])
 def update_product(product_id):
     """Update an existing product"""
+    session = SessionLocal()
     try:
-        product = Product.query.get_or_404(product_id)
+        # NOTE: Using session.get() here is safer/clearer than Product.query.get_or_404()
+        product = session.get(Product, product_id)
+        if not product:
+            session.close()
+            return jsonify({'error': 'Product not found'}), 404
+
         data = request.get_json()
         
         # Update fields
@@ -455,51 +407,38 @@ def update_product(product_id):
         if 'color_options' in data:
             product.color_options = json.dumps(data['color_options'])
         
-        # Don't allow model_code changes to prevent breaking references
-        # if 'model_code' in data:
-        #     product.model_code = data['model_code']
-        
         product.updated_at = datetime.utcnow()
-        session = SessionLocal()
-# ...do stuff...
-        session.add(product)
-        session.commit()
-        session.close()
         session.commit()
         
         return jsonify(serialize_product(product))
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
         session.rollback()
+        current_app.logger.exception(f"Error updating product: {e}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
 
 @appliance_bp.route('/products/<int:product_id>', methods=['DELETE'])
 def delete_product(product_id):
     """Delete a product (soft delete by setting active=False)"""
+    session = SessionLocal()
     try:
-        product = Product.query.get_or_404(product_id)
+        product = session.get(Product, product_id)
+        if not product:
+            session.close()
+            return jsonify({'error': 'Product not found'}), 404
+        
         product.active = False
         product.updated_at = datetime.utcnow()
-        session = SessionLocal()
-# ...do stuff...
-        session.add(product)
-        session.commit()
-        session.close()
         session.commit()
         
         return jsonify({'message': 'Product deactivated successfully'})
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
         session.rollback()
+        current_app.logger.exception(f"Error deleting product: {e}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
 
 # Brand endpoints
 @appliance_bp.route('/brands', methods=['GET'])
@@ -528,14 +467,17 @@ def get_brands():
 @appliance_bp.route('/brands', methods=['POST'])
 def create_brand():
     """Create a new brand"""
+    session = SessionLocal()
     try:
         data = request.get_json()
         
         if not data.get('name'):
+            session.close()
             return jsonify({'error': 'Brand name is required'}), 400
         
         # Check if brand already exists
-        if Brand.query.filter_by(name=data['name']).first():
+        if session.query(Brand).filter_by(name=data['name']).first():
+            session.close()
             return jsonify({'error': 'Brand already exists'}), 400
         
         brand = Brand(
@@ -545,17 +487,7 @@ def create_brand():
             active=data.get('active', True)
         )
         
-        session = SessionLocal()
-# ...do stuff...
         session.add(brand)
-        session.commit()
-        session.close()
-
-        session = SessionLocal()
-# ...do stuff...
-        session.add(brand)
-        session.commit()
-        session.close()
         session.commit()
         
         return jsonify({
@@ -566,13 +498,11 @@ def create_brand():
             'active': brand.active
         }), 201
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
         session.rollback()
+        current_app.logger.exception(f"Error creating brand: {e}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
 
 # Category endpoints
 @appliance_bp.route('/categories', methods=['GET'])
@@ -600,14 +530,17 @@ def get_categories():
 @appliance_bp.route('/categories', methods=['POST'])
 def create_category():
     """Create a new appliance category"""
+    session = SessionLocal()
     try:
         data = request.get_json()
         
         if not data.get('name'):
+            session.close()
             return jsonify({'error': 'Category name is required'}), 400
         
         # Check if category already exists
-        if ApplianceCategory.query.filter_by(name=data['name']).first():
+        if session.query(ApplianceCategory).filter_by(name=data['name']).first():
+            session.close()
             return jsonify({'error': 'Category already exists'}), 400
         
         category = ApplianceCategory(
@@ -616,17 +549,7 @@ def create_category():
             active=data.get('active', True)
         )
         
-        session = SessionLocal()
-# ...do stuff...
         session.add(category)
-        session.commit()
-        session.close()
-
-        session = SessionLocal()
-# ...do stuff...
-        session.add(category)
-        session.commit()
-        session.close()
         session.commit()
         
         return jsonify({
@@ -636,13 +559,11 @@ def create_category():
             'active': category.active
         }), 201
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
         session.rollback()
+        current_app.logger.exception(f"Error creating category: {e}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
 
 # Price tier endpoint
 @appliance_bp.route('/products/<int:product_id>/price/<tier>', methods=['GET'])
@@ -675,7 +596,7 @@ def search_products():
         products = Product.query.filter(
             Product.active == True
         ).filter(
-            db.or_(
+            or_( # Changed db.or_ to or_
                 Product.name.ilike(search_filter),
                 Product.model_code.ilike(search_filter),
                 Product.series.ilike(search_filter)
@@ -700,17 +621,21 @@ def search_products():
 @appliance_bp.route('/import/upload', methods=['POST'])
 def upload_import_file():
     """Upload file for data import and start processing in background"""
+    session = SessionLocal()
     try:
         if 'file' not in request.files:
+            session.close()
             return jsonify({'error': 'No file provided'}), 400
         
         file = request.files['file']
         import_type = request.form.get('import_type', 'appliance_matrix')
         
         if file.filename == '':
+            session.close()
             return jsonify({'error': 'No file selected'}), 400
         
         if not file.filename.lower().endswith(('.xlsx', '.xls', '.csv')):
+            session.close()
             return jsonify({'error': 'Invalid file type. Please upload Excel or CSV file'}), 400
         
         # Save file
@@ -730,20 +655,11 @@ def upload_import_file():
             imported_by=request.form.get('imported_by', 'System')
             # Status will be 'processing' by default
         )
-        session = SessionLocal()
-# ...do stuff...
         session.add(import_record)
-        session.commit()
-        session.close()
-
-        session = SessionLocal()
-# ...do stuff...
-        session.add(import_record)
-        session.commit()
-        session.close()
         session.commit() # Commit to get the ID
 
         # --- START THE BACKGROUND WORKER ---
+        # Note: Background worker logic uses its own SessionLocal internally
         worker_thread = threading.Thread(
             target=process_import_file,
             args=(current_app._get_current_object(), import_record.id, file_path, import_type)
@@ -758,18 +674,17 @@ def upload_import_file():
         }), 201
         
     except Exception as e:
-        session = SessionLocal()
-# ...do stuff...
-        session.add(None)
-        session.commit()
-        session.close()
-        session.rollback() # Rollback if import_record creation fails
+        session.rollback()
+        current_app.logger.exception(f"Error uploading import file: {e}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
 
 @appliance_bp.route('/import/<int:import_id>/status', methods=['GET'])
 def get_import_status(import_id):
     """Get status of data import"""
     try:
+        # Using the simplified query syntax for read-only endpoint
         import_record = DataImport.query.get_or_404(import_id)
         
         return jsonify({
