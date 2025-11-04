@@ -91,16 +91,16 @@ def process_import_file(app, import_id, file_path, import_type):
                     brand = Brand(name=brand_name, active=True)
                     session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(brand)
+                    session.add(brand)
+                    session.commit()
+                    session.close()
+
                     session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit() # Commit brand to get ID
+                    session.add(brand)
+                    session.commit()
+                    session.close()
+                    # Commit brand to get ID
 
                 # 2. Reload DataFrame with correct header (row 5, index 4)
                 if file_path.endswith(('.xlsx', '.xls')):
@@ -121,15 +121,17 @@ session.close()
                         if not category:
                             category = ApplianceCategory(name=product_name_category, active=True)
                             session = SessionLocal()
-                            session.add(...)
+# ...do stuff...
+                            session.add(category)
                             session.commit()
                             session.close()
-
 
                             session = SessionLocal()
-                            session.add(...)
+# ...do stuff...
+                            session.add(category)
                             session.commit()
                             session.close()
+                            # Commit category to get ID
 
                         # Helper to process a single product entry
                         def process_entry(model_codes_str, series, price, tier):
@@ -151,8 +153,8 @@ session.close()
                                         in_stock=True
                                     )
                                     session = SessionLocal()
-
-                                    session.add(...)
+# ...do stuff...
+                                    session.add(product)
                                     session.commit()
                                     session.close()
                                 
@@ -188,19 +190,19 @@ session.close()
                         processed_count += process_entry(row.iloc[9], row.iloc[10], row.iloc[11], 'high')
                         
                         session = SessionLocal()
-                        # ...do stuff...
-                        session.add(...)
+# ...do stuff...
+                        session.add(None) # Changed to None as placeholder for what's added in process_entry
                         session.commit()
                         session.close()
-
+                        session.commit() # Commit after each row (batch of 1-3 products)
 
                     except Exception as row_e:
                         session = SessionLocal()
-                        # ...do stuff...
-                        session.add(...)
+# ...do stuff...
+                        session.add(None)
                         session.commit()
                         session.close()
-.rollback()
+                        session.rollback()
                         failed_count += 1
                         error_log.append(f"Row {index + 6}: {str(row_e)}") # +6 = 1-based index + 5 header rows
 
@@ -240,19 +242,19 @@ session.close()
                     except Exception as row_e:
                         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+                        session.add(None)
+                        session.commit()
+                        session.close()
+                        session.rollback()
                         failed_count += 1
                         error_log.append(f"Row {index + 4}: {str(row_e)}") # +4 = 1-based + 3 header rows
                 
                 session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+                session.add(None)
+                session.commit()
+                session.close()
+                session.commit()
 
             # --- Import finished, update the job status ---
             import_record.status = 'completed'
@@ -264,10 +266,10 @@ session.close()
             # Fatal error (e.g., file read error)
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+            session.add(None)
+            session.commit()
+            session.close()
+            session.rollback()
             import_record.status = 'failed'
             import_record.error_log = f"Fatal Error: {str(e)}"
         
@@ -275,10 +277,10 @@ session.close()
             import_record.completed_at = datetime.utcnow()
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+            session.add(import_record)
+            session.commit()
+            session.close()
+            session.commit()
 
 # Product endpoints
 @appliance_bp.route('/products', methods=['GET'])
@@ -407,25 +409,25 @@ def create_product():
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(product)
+        session.add(product)
+        session.commit()
+        session.close()
+
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(product)
+        session.commit()
+        session.close()
+        session.commit()
         
         return jsonify(serialize_product(product)), 201
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         return jsonify({'error': str(e)}), 500
 
 @appliance_bp.route('/products/<int:product_id>', methods=['PUT'])
@@ -460,19 +462,19 @@ def update_product(product_id):
         product.updated_at = datetime.utcnow()
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(product)
+        session.commit()
+        session.close()
+        session.commit()
         
         return jsonify(serialize_product(product))
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         return jsonify({'error': str(e)}), 500
 
 @appliance_bp.route('/products/<int:product_id>', methods=['DELETE'])
@@ -484,19 +486,19 @@ def delete_product(product_id):
         product.updated_at = datetime.utcnow()
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(product)
+        session.commit()
+        session.close()
+        session.commit()
         
         return jsonify({'message': 'Product deactivated successfully'})
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         return jsonify({'error': str(e)}), 500
 
 # Brand endpoints
@@ -545,16 +547,16 @@ def create_brand():
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(brand)
+        session.add(brand)
+        session.commit()
+        session.close()
+
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(brand)
+        session.commit()
+        session.close()
+        session.commit()
         
         return jsonify({
             'id': brand.id,
@@ -566,10 +568,10 @@ session.close()
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         return jsonify({'error': str(e)}), 500
 
 # Category endpoints
@@ -616,16 +618,16 @@ def create_category():
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(category)
+        session.add(category)
+        session.commit()
+        session.close()
+
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(category)
+        session.commit()
+        session.close()
+        session.commit()
         
         return jsonify({
             'id': category.id,
@@ -636,10 +638,10 @@ session.close()
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         return jsonify({'error': str(e)}), 500
 
 # Price tier endpoint
@@ -730,16 +732,16 @@ def upload_import_file():
         )
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(import_record)
+        session.add(import_record)
+        session.commit()
+        session.close()
+
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit() # Commit to get the ID
+        session.add(import_record)
+        session.commit()
+        session.close()
+        session.commit() # Commit to get the ID
 
         # --- START THE BACKGROUND WORKER ---
         worker_thread = threading.Thread(
@@ -758,10 +760,10 @@ session.close()
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback() # Rollback if import_record creation fails
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback() # Rollback if import_record creation fails
         return jsonify({'error': str(e)}), 500
 
 @appliance_bp.route('/import/<int:import_id>/status', methods=['GET'])
