@@ -1,3 +1,5 @@
+from functools import wraps # Moved to the top
+
 from flask import Blueprint, request, jsonify
 from datetime import datetime
 from ..models import CustomerFormData, User, Customer, ApprovalNotification
