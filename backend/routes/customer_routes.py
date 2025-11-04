@@ -101,16 +101,16 @@ def create_customer():
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(new_customer)
+        session.add(new_customer)
+        session.commit()
+        session.close()
+
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(new_customer)
+        session.commit()
+        session.close()
+        session.commit()
         
         current_app.logger.info(f"Customer {new_customer.id} created by user {request.current_user.id}")
         
@@ -123,10 +123,10 @@ session.close()
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         current_app.logger.exception(f"Error creating customer: {e}")
         return jsonify({'error': f'Failed to create customer: {str(e)}'}), 500
 
@@ -203,10 +203,10 @@ def update_customer(customer_id):
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(customer)
+        session.commit()
+        session.close()
+        session.commit()
         
         return jsonify({
             'success': True,
@@ -217,10 +217,10 @@ session.close()
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         current_app.logger.exception(f"Error updating customer {customer_id}: {e}")
         return jsonify({'error': f'Failed to update customer: {str(e)}'}), 500
 
@@ -247,16 +247,16 @@ def delete_customer(customer_id):
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.delete(customer)
+        session.add(customer)
+        session.commit()
+        session.close()
+        session.delete(customer)
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.commit()
         
         current_app.logger.info(f"Customer {customer_id} deleted by user {request.current_user.id}")
         
@@ -268,10 +268,10 @@ session.close()
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         current_app.logger.exception(f"Error deleting customer {customer_id}: {e}")
         return jsonify({'error': 'Failed to delete customer'}), 500
 
@@ -346,10 +346,9 @@ def create_project(customer_id):
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(new_project)
+        session.add(new_project)
+        session.commit()
+        session.close()
         
         # --- CRITICAL FIX 1: SIMPLIFY STAGE SYNC ON CREATION ---
         
@@ -366,10 +365,10 @@ session.close()
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.commit()
         
         current_app.logger.info(f"Project {new_project.id} created for customer {customer_id} by user {request.current_user.id}")
         
@@ -382,10 +381,10 @@ session.close()
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         current_app.logger.exception(f"Error creating project for customer {customer_id}: {e}")
         return jsonify({'error': f'Failed to create project: {str(e)}'}), 500
 
@@ -468,10 +467,10 @@ def update_project(project_id):
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(project)
+        session.commit()
+        session.close()
+        session.commit()
         
         current_app.logger.info(f"Project {project_id} updated by user {request.current_user.id}")
         
@@ -484,10 +483,10 @@ session.close()
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         current_app.logger.exception(f"Error updating project {project_id}: {e}")
         return jsonify({'error': f'Failed to update project: {str(e)}'}), 500
 
@@ -508,16 +507,16 @@ def delete_project(project_id):
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.delete(project)
+        session.add(project)
+        session.commit()
+        session.close()
+        session.delete(project)
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.commit()
         
         current_app.logger.info(f"Project {project_id} deleted by user {request.current_user.id}")
         
@@ -529,10 +528,10 @@ session.close()
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         current_app.logger.exception(f"Error deleting project {project_id}: {e}")
         return jsonify({'error': 'Failed to delete project'}), 500
 
@@ -615,16 +614,16 @@ def delete_drawing_document(drawing_id):
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.delete(drawing)
+        session.add(drawing)
+        session.commit()
+        session.close()
+        session.delete(drawing)
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.commit()
         
         current_app.logger.info(f"Drawing document {drawing_id} deleted by user {request.current_user.id}")
         
@@ -636,10 +635,10 @@ session.close()
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         current_app.logger.exception(f"Error deleting drawing document {drawing_id}: {e}")
         return jsonify({'error': 'Failed to delete drawing document'}), 500
 
@@ -690,16 +689,16 @@ def submit_form():
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(form_submission)
+        session.add(form_submission)
+        session.commit()
+        session.close()
+
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(form_submission)
+        session.commit()
+        session.close()
+        session.commit()
         
         current_app.logger.info(f"Form submitted for project {project_id}")
         
@@ -712,9 +711,9 @@ session.close()
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         current_app.logger.exception(f"Error submitting form: {e}")
         return jsonify({'error': f'Failed to submit form: {str(e)}'}), 500

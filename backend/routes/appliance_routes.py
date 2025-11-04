@@ -121,17 +121,15 @@ session.close()
                         if not category:
                             category = ApplianceCategory(name=product_name_category, active=True)
                             session = SessionLocal()
-# ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(category)
+                            session.add(...)
+                            session.commit()
+                            session.close()
+
+
                             session = SessionLocal()
-# ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit() # Commit category to get ID
+                            session.add(...)
+                            session.commit()
+                            session.close()
 
                         # Helper to process a single product entry
                         def process_entry(model_codes_str, series, price, tier):
@@ -153,11 +151,10 @@ session.close()
                                         in_stock=True
                                     )
                                     session = SessionLocal()
-# ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(product)
+
+                                    session.add(...)
+                                    session.commit()
+                                    session.close()
                                 
                                 product.brand_id = brand.id
                                 product.category_id = category.id
@@ -191,18 +188,18 @@ session.close()
                         processed_count += process_entry(row.iloc[9], row.iloc[10], row.iloc[11], 'high')
                         
                         session = SessionLocal()
-# ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit() # Commit after each row (batch of 1-3 products)
+                        # ...do stuff...
+                        session.add(...)
+                        session.commit()
+                        session.close()
+
 
                     except Exception as row_e:
                         session = SessionLocal()
-# ...do stuff...
-session.add(...)
-session.commit()
-session.close()
+                        # ...do stuff...
+                        session.add(...)
+                        session.commit()
+                        session.close()
 .rollback()
                         failed_count += 1
                         error_log.append(f"Row {index + 6}: {str(row_e)}") # +6 = 1-based index + 5 header rows

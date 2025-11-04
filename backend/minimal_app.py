@@ -2,11 +2,21 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
+# 🟢 FIX 1: Import necessary SQLAlchemy components
+from sqlalchemy import Column, Integer, String, Text, DateTime
+from sqlalchemy.orm import declarative_base
 import secrets
 import string
 import json
 from datetime import datetime, timedelta
 import os
+
+# 🟢 FIX 2: Define Base and SessionLocal for ORM compatibility, mimicking db.py
+# If using Flask-SQLAlchemy, Base isn't usually needed, but here it's mixed with ORM style.
+# Assuming Base is declarative_base() and SessionLocal is a Session maker.
+Base = declarative_base()
+# NOTE: SessionLocal is not defined in this file, which will cause an error later.
+# For simplicity in this "minimal_app", we will use `db.session` for Flask-SQLAlchemy style.
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -16,6 +26,7 @@ CORS(app, origins=["http://localhost:3000", "http://127.0.0.1:3000"])
 
 # Database configuration
 basedir = os.path.abspath(os.path.dirname(__file__))
+# Note: This is an SQLite setup, not a PostgreSQL/Supabase setup
 app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{os.path.join(basedir, "database.db")}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
@@ -23,7 +34,9 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
 # Customer Model
-class Customer(Base):
+# 🟢 FIX 3: Change model definition to use Flask-SQLAlchemy style (db.Model)
+class Customer(db.Model):
+    __tablename__ = 'customer'
     id = Column(Integer, primary_key=True)
     name = Column(String(100), nullable=False)
     address = Column(Text, nullable=True)
@@ -61,18 +74,14 @@ def handle_customers():
             email=data.get('email', ''),
             status=data.get('status', 'Active')
         )
-        session = SessionLocal()
-# ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(new_customer)
-        session = SessionLocal()
-# ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        # 🟢 FIX 4: Use db.session for Flask-SQLAlchemy transactions
+        try:
+            db.session.add(new_customer)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            raise
+            
         return jsonify({'id': new_customer.id}), 201
     
     customers = Customer.query.all()
@@ -232,18 +241,13 @@ def submit_customer_form():
             status='New Lead'
         )
         
-        session = SessionLocal()
-# ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(new_customer)
-        session = SessionLocal()
-# ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        # 🟢 FIX 5: Use db.session for Flask-SQLAlchemy transactions
+        try:
+            db.session.add(new_customer)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            raise
         
         # Mark token as used
         form_tokens[token]['used'] = True
@@ -259,12 +263,8 @@ session.close()
         
     except Exception as e:
         print(f"❌ Error submitting customer form: {str(e)}")
-        session = SessionLocal()
-# ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        # 🟢 FIX 6: Use db.session.rollback() for error handling
+        db.session.rollback()
         return jsonify({
             'success': False,
             'error': f'Form submission failed: {str(e)}'
@@ -284,30 +284,21 @@ if __name__ == '__main__':
     
     # Create database tables
     with app.app_context():
-        Base.metadata.create_all(bind=engine)
-
+        # 🟢 FIX 7: Use db.create_all() for Flask-SQLAlchemy metadata creation
+        db.create_all()
         print("✅ Database tables created!")
-    
-    # Add some test data if no customers exist
-    with app.app_context():
+        
+        # Add some test data if no customers exist
         if Customer.query.count() == 0:
             test_customers = [
                 Customer(name="John Smith", phone="123-456-7890", address="123 Main St", status="Active"),
                 Customer(name="Jane Doe", phone="987-654-3210", address="456 Oak Ave", status="New Lead"),
             ]
             for customer in test_customers:
-                session = SessionLocal()
-# ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(customer)
-            session = SessionLocal()
-# ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+                # 🟢 FIX 8: Use db.session for inserting test data
+                db.session.add(customer)
+            
+            db.session.commit()
             print("✅ Added test customers!")
     
     print("📍 Server starting at: http://127.0.0.1:5000")

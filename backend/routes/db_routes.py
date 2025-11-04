@@ -86,12 +86,12 @@ def handle_single_customer(customer_id):
             if "no such column: customer_form_data.project_id" in str(e):
                 current_app.logger.warning(f"Fallback query due to missing project_id column in database schema.")
                 # Fallback to selecting only fields present in the old schema
-                form_entries = session = SessionLocal()
+                session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.query(
+                session.add(None)
+                session.commit()
+                session.close()
+                form_entries = CustomerFormData.query(
                     CustomerFormData.id, 
                     CustomerFormData.form_data, 
                     CustomerFormData.token_used,
@@ -201,25 +201,25 @@ session.close()
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(customer)
+        session.commit()
+        session.close()
+        session.commit()
         return jsonify({'message': 'Customer updated successfully'})
     
     elif request.method == 'DELETE':
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.delete(customer)
+        session.add(customer)
+        session.commit()
+        session.close()
+        session.delete(customer)
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.commit()
         return jsonify({'message': 'Customer deleted successfully'})
 
 @db_bp.route('/customers/<string:customer_id>/sync-stage', methods=['POST'])
@@ -286,16 +286,16 @@ def handle_quotations():
             
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(quotation)
+            session.add(quotation)
+            session.commit()
+            session.close()
+            session.add(quotation)
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.flush()  # Get the quotation.id
+            session.add(quotation)
+            session.commit()
+            session.close()
+            session.flush()  # Get the quotation.id
             
             current_app.logger.info(f"[QUOTATION POST] Created quotation ID: {quotation.id}")
             
@@ -311,10 +311,10 @@ session.close()
                 )
                 session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(q_item)
+                session.add(q_item)
+                session.commit()
+                session.close()
+                session.add(q_item)
                 items_created += 1
             
             current_app.logger.info(f"[QUOTATION POST] Created {items_created} items")
@@ -322,10 +322,10 @@ session.close()
             # Commit everything
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+            session.add(None)
+            session.commit()
+            session.close()
+            session.commit()
             
             current_app.logger.info(f"[QUOTATION POST] Successfully saved quotation {quotation.id} for customer {customer_id}")
             
@@ -342,19 +342,19 @@ session.close()
         except KeyError as e:
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+            session.add(None)
+            session.commit()
+            session.close()
+            session.rollback()
             current_app.logger.error(f"[QUOTATION POST ERROR] Missing key: {e}")
             return jsonify({'error': f'Missing required field: {str(e)}'}), 400
         except Exception as e:
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+            session.add(None)
+            session.commit()
+            session.close()
+            session.rollback()
             current_app.logger.exception(f"[QUOTATION POST ERROR] {str(e)}")
             return jsonify({'error': str(e)}), 500
     
@@ -458,16 +458,16 @@ def handle_jobs():
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(job)
+        session.add(job)
+        session.commit()
+        session.close()
+
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(job)
+        session.commit()
+        session.close()
+        session.commit()
         
         # Update customer stage to match job stage if this is their first/primary job
         customer = Customer.query.get(job.customer_id)
@@ -576,10 +576,10 @@ def handle_single_job(job_id):
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(job)
+        session.commit()
+        session.close()
+        session.commit()
         
         # Update customer stage if this job's stage changed
         if 'stage' in data:
@@ -592,16 +592,16 @@ session.close()
     elif request.method == 'DELETE':
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.delete(job)
+        session.add(job)
+        session.commit()
+        session.close()
+        session.delete(job)
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.commit()
         
         # Update customer stage after job deletion
         customer = Customer.query.get(job.customer_id)
@@ -857,19 +857,19 @@ def update_customer_stage(customer_id):
             )
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(notification_to_add) # Add notification to the session
+            session.add(notification_to_add)
+            session.commit()
+            session.close()
+            session.add(notification_to_add) # Add notification to the session
         # --- End Notification Logic ---
 
         # CRITICAL: Commit the changes to the database
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(customer)
+        session.commit()
+        session.close()
+        session.commit()
         
         return jsonify({
             'message': 'Stage updated successfully',
@@ -881,10 +881,10 @@ session.close()
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         # current_app.logger.error(f"Error updating customer stage for {customer_id}: {e}") # Log error
         return jsonify({'error': str(e)}), 500
 
@@ -946,10 +946,10 @@ def update_job_stage(job_id):
             )
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(notification_to_add) # Add notification to the session
+            session.add(notification_to_add)
+            session.commit()
+            session.close()
+            session.add(notification_to_add) # Add notification to the session
         # --- End Notification Logic ---
         
         # --- START OF FIX: Only sync customer stage if there is only ONE job/project ---
@@ -974,10 +974,10 @@ session.close()
         # Commit ALL changes (stage update, notification, AND customer sync) together
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit() 
+        session.add(job)
+        session.commit()
+        session.close()
+        session.commit() 
 
         return jsonify({
             'message': 'Stage updated successfully',
@@ -989,9 +989,9 @@ session.close()
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback() # Rollback ALL changes if anything fails
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback() # Rollback ALL changes if anything fails
         # current_app.logger.error(f"❌ Error updating job stage for {job_id}: {e}") # Log error
         return jsonify({'error': f'Failed to update stage: {str(e)}'}), 500

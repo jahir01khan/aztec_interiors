@@ -137,20 +137,20 @@ def approve_document():
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(submission)
+        session.commit()
+        session.close()
+        session.commit()
         
         return jsonify({'success': True, 'message': 'Document approved successfully'}), 200
         
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         current_app.logger.exception(f"Error approving document: {e}")
         return jsonify({'error': 'Failed to approve document'}), 500
 
@@ -195,19 +195,19 @@ def reject_document():
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(submission)
+        session.commit()
+        session.close()
+        session.commit()
         
         return jsonify({'success': True, 'message': 'Document rejected'}), 200
         
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         current_app.logger.exception(f"Error rejecting document: {e}")
         return jsonify({'error': 'Failed to reject document'}), 500

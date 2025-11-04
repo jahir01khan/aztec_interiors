@@ -210,20 +210,20 @@ def approve_document():
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(submission)
+        session.commit()
+        session.close()
+        session.commit()
         
         return jsonify({'success': True, 'message': 'Document approved successfully'}), 200
         
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         current_app.logger.exception(f"Error approving document: {e}")
         return jsonify({'error': 'Failed to approve document'}), 500
 
@@ -268,20 +268,20 @@ def reject_document():
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(submission)
+        session.commit()
+        session.close()
+        session.commit()
         
         return jsonify({'success': True, 'message': 'Document rejected'}), 200
         
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         current_app.logger.exception(f"Error rejecting document: {e}")
         return jsonify({'error': 'Failed to reject document'}), 500
 
@@ -493,16 +493,16 @@ def save_invoice():
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(customer_form_data)
+        session.add(customer_form_data)
+        session.commit()
+        session.close()
+
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.flush()  # Get the ID without committing
+        session.add(customer_form_data)
+        session.commit()
+        session.close()
+        session.flush()  # Get the ID without committing
         
         # Create approval notification using SQLAlchemy ORM instead of raw SQL
         try:
@@ -528,10 +528,10 @@ session.close()
                 )
                 session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(notification)
+                session.add(notification)
+                session.commit()
+                session.close()
+                session.add(notification)
             
             current_app.logger.info(
                 f"Invoice saved for customer {customer_id}. ID: {customer_form_data.id}. "
@@ -545,10 +545,10 @@ session.close()
         # Commit the main transaction (includes invoice + notifications)
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.commit()
 
         return jsonify({
             "success": True,
@@ -560,10 +560,10 @@ session.close()
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         current_app.logger.exception(f"Error saving invoice: {e}")
         return jsonify({"error": f"Failed to save invoice: {str(e)}"}), 500
     
@@ -724,25 +724,24 @@ def save_receipt():
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(customer_form_data)
+        session.add(customer_form_data)
+        session.commit()
+        session.close()
+
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.flush()
+        session.add(customer_form_data)
+        session.commit()
+        session.close()
+        session.flush()
         
         # Create approval notification using raw SQL
         try:
             conn = get_session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-()
+            session.add(None)
+            session.commit()
+            session.close()
             cursor = conn.cursor()
             
             # Get all managers to notify
@@ -784,10 +783,10 @@ session.close()
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.commit()
 
         return jsonify({
             "success": True,
@@ -799,10 +798,10 @@ session.close()
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         current_app.logger.exception(f"Error saving receipt: {e}")
         return jsonify({"error": f"Failed to save receipt: {str(e)}"}), 500
 
@@ -982,16 +981,16 @@ def save_checklist():
         
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(customer_form_data)
+        session.add(customer_form_data)
+        session.commit()
+        session.close()
+
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(customer_form_data)
+        session.commit()
+        session.close()
+        session.commit()
         
         current_app.logger.info(f"Staff checklist '{checklist_type}' saved for customer {customer_id} ({customer_name}). ID: {customer_form_data.id}")
 
@@ -1003,10 +1002,10 @@ session.close()
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         current_app.logger.exception(f"Error saving internal checklist: {e}")
         return jsonify({"error": f"Failed to save checklist: {str(e)}"}), 500
 
@@ -1152,16 +1151,16 @@ def submit_customer_form():
                 )
                 session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(customer)
+                session.add(customer)
+                session.commit()
+                session.close()
+                session.add(customer)
                 session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.flush()
+                session.add(customer)
+                session.commit()
+                session.close()
+                session.flush()
                 customer_id = customer.id
                 current_app.logger.info(f"Created new customer {customer_id} from form submission")
 
@@ -1174,16 +1173,16 @@ session.close()
             )
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(customer_form_data)
+            session.add(customer_form_data)
+            session.commit()
+            session.close()
+
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+            session.add(customer_form_data)
+            session.commit()
+            session.close()
+            session.commit()
             
             final_customer = Customer.query.get(customer_id)
             customer_name = final_customer.name if final_customer else 'Customer'
@@ -1200,10 +1199,10 @@ session.close()
         except Exception as e:
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+            session.add(None)
+            session.commit()
+            session.close()
+            session.rollback()
             current_app.logger.exception(f"Database error during form submission for customer {customer_id}")
             raise e
 
@@ -1211,10 +1210,10 @@ session.close()
         current_app.logger.exception("Form submission failed")
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         return jsonify({'success': False, 'error': f'Form submission failed: {str(e)}'}), 500
 
 @form_bp.route('/generate-form-link', methods=['POST', 'OPTIONS'])
@@ -1284,16 +1283,16 @@ def delete_form_submission(submission_id):
         # Now safely delete the form submission
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.delete(submission)
+        session.add(submission)
+        session.commit()
+        session.close()
+        session.delete(submission)
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.commit()
         
         return jsonify({
             'message': 'Form submission deleted successfully',
@@ -1303,10 +1302,10 @@ session.close()
     except Exception as e:
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         print(f"[ERROR] Failed to delete form submission {submission_id}: {str(e)}")
         return jsonify({
             'error': f'Failed to delete form submission: {str(e)}'

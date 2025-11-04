@@ -1,9 +1,9 @@
 # /Users/razataiab/Desktop/aztec_interiors/backend/routes/notification_routes.py
 
 from flask import Blueprint, jsonify, request
-from ..database import db          # relative import
-from ..models import ProductionNotification  # relative import
-from .auth_helpers import token_required     # stays as-is
+from ..database import db          # relative import
+from ..models import ProductionNotification  # relative import
+from .auth_helpers import token_required     # stays as-is
 from datetime import datetime
 
 
@@ -18,7 +18,7 @@ def get_production_notifications():
     # Ensure only Production roles can access this
     # --- TASK 2: REMOVE ROLE CHECK TO ALLOW ALL USERS ---
     # if request.current_user.role != "Production":
-    #     return jsonify({'error': 'Not authorized'}), 403
+    #     return jsonify({'error': 'Not authorized'}), 403
 
     notifications = ProductionNotification.query.filter_by(read=False).order_by(ProductionNotification.created_at.desc()).all()
 
@@ -41,7 +41,7 @@ def mark_as_read(notification_id):
 
     # --- TASK 2: REMOVE ROLE CHECK TO ALLOW ALL USERS ---
     # if request.current_user.role != "Production":
-    #     return jsonify({'error': 'Not authorized'}), 403
+    #     return jsonify({'error': 'Not authorized'}), 403
 
     notification = ProductionNotification.query.get(notification_id)
     if not notification:
@@ -49,20 +49,24 @@ def mark_as_read(notification_id):
 
     try:
         notification.read = True
+        
+        # 🟢 FIX: Correct transaction block
         session = SessionLocal()
-# ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        try:
+            session.add(notification)
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+            
         return jsonify({'message': 'Notification marked as read'}), 200
     except Exception as e:
+        # 🟢 FIX: Correct rollback block
         session = SessionLocal()
-# ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.rollback()
+        session.close()
         return jsonify({'error': str(e)}), 500
 
 @notification_bp.route('/notifications/production/mark-all-read', methods=['PATCH', 'OPTIONS'])
@@ -73,23 +77,26 @@ def mark_all_as_read():
 
     # --- TASK 2: REMOVE ROLE CHECK TO ALLOW ALL USERS ---
     # if request.current_user.role != "Production":
-    #     return jsonify({'error': 'Not authorized'}), 403
+    #     return jsonify({'error': 'Not authorized'}), 403
 
     try:
         # Update all unread notifications in one query
         ProductionNotification.query.filter_by(read=False).update({'read': True})
+        
+        # 🟢 FIX: Correct transaction block
         session = SessionLocal()
-# ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        try:
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+            
         return jsonify({'message': 'All notifications marked as read'}), 200
     except Exception as e:
+        # 🟢 FIX: Correct rollback block
         session = SessionLocal()
-# ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.rollback()
+        session.close()
         return jsonify({'error': str(e)}), 500

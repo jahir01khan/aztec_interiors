@@ -62,16 +62,16 @@ def handle_assignments():
             
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(assignment)
+            session.add(assignment)
+            session.commit()
+            session.close()
+
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+            session.add(assignment)
+            session.commit()
+            session.close()
+            session.commit()
             
             # --- NEW GOOGLE SYNC LOGIC (CREATE) ---
             should_sync = False
@@ -84,10 +84,10 @@ session.close()
                     assignment.calendar_event_id = event_id
                     session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+                    session.add(assignment)
+                    session.commit()
+                    session.close()
+                    session.commit()
                 except Exception as cal_err:
                     print(f"Google Calendar event creation failed: {cal_err}")
 
@@ -99,10 +99,10 @@ session.close()
         except Exception as e:
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+            session.add(None)
+            session.commit()
+            session.close()
+            session.rollback()
             return jsonify({'error': str(e)}), 400
     
     # -------------------- GET --------------------
@@ -187,10 +187,10 @@ def handle_single_assignment(assignment_id):
             
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+            session.add(assignment)
+            session.commit()
+            session.close()
+            session.commit()
 
             # --- NEW GOOGLE SYNC LOGIC (UPDATE) ---
             should_sync = False
@@ -211,10 +211,10 @@ session.close()
         except Exception as e:
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+            session.add(None)
+            session.commit()
+            session.close()
+            session.rollback()
             return jsonify({'error': str(e)}), 400
     
     # -------------------- DELETE --------------------
@@ -236,25 +236,25 @@ session.close()
             
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.delete(assignment)
+            session.add(assignment)
+            session.commit()
+            session.close()
+            session.delete(assignment)
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+            session.add(assignment)
+            session.commit()
+            session.close()
+            session.commit()
             return jsonify({'message': 'Assignment deleted successfully'})
         
         except Exception as e:
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+            session.add(None)
+            session.commit()
+            session.close()
+            session.rollback()
             return jsonify({'error': str(e)}), 400
 
 

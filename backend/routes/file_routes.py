@@ -85,16 +85,16 @@ def delete_customer_drawing(drawing_id):
         # 2. Delete DB record
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.delete(drawing)
+        session.add(drawing)
+        session.commit()
+        session.close()
+        session.delete(drawing)
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.commit()
 
         return jsonify({'success': True, 'message': 'Drawing deleted successfully'}), 200
 
@@ -102,10 +102,10 @@ session.close()
         # Rollback the session on error
         session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+        session.add(None)
+        session.commit()
+        session.close()
+        session.rollback()
         current_app.logger.error(f"Error deleting drawing {drawing_id}: {e}", exc_info=True)
         # 💡 DEBUG FIX: Return the detailed exception message to the client
         return jsonify({'error': f'Failed to delete. Server error: {str(e)}'}), 500
@@ -365,16 +365,16 @@ def handle_customer_drawings():
 
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.add(new_drawing)
+            session.add(new_drawing)
+            session.commit()
+            session.close()
+
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.commit()
+            session.add(new_drawing)
+            session.commit()
+            session.close()
+            session.commit()
 
             current_app.logger.info(f"Drawing saved for customer {customer_id}: {filename} at {file_path}")
 
@@ -394,10 +394,10 @@ session.close()
         except Exception as e:
             session = SessionLocal()
 # ...do stuff...
-session.add(...)
-session.commit()
-session.close()
-.rollback()
+            session.add(None)
+            session.commit()
+            session.close()
+            session.rollback()
             current_app.logger.error(f"Error processing drawing upload: {str(e)}", exc_info=True)
             # Try to remove partially uploaded file if save failed before commit
             if 'file_path' in locals() and os.path.exists(file_path):
