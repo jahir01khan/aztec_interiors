@@ -1083,8 +1083,8 @@ class DrawingDocument(db.Model):
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     
     # FOREIGN KEYS: Links to Customer and Project
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=False)
-    project_id = db.Column(db.String(36), db.ForeignKey('projects.id'), nullable=True) # Optional link to a project
+    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id', ondelete='CASCADE'), nullable=False) # ADDED ondelete='CASCADE'
+    project_id = db.Column(db.String(36), db.ForeignKey('projects.id', ondelete='CASCADE'), nullable=True) # ADDED ondelete='CASCADE'
     
     # File details
     file_name = db.Column(db.String(255), nullable=False)
@@ -1097,7 +1097,7 @@ class DrawingDocument(db.Model):
     uploaded_by = db.Column(db.String(200))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    # RELATIONSHIPS
+    # RELATIONSHIPS (passive_deletes=True can also help, but ondelete='CASCADE' is stronger)
     customer = db.relationship('Customer', backref='drawing_documents')
     project = db.relationship('Project', backref='drawing_documents')
     

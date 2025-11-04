@@ -52,6 +52,49 @@ def get_drawing_folder():
         pass
     return folder
 
+# -------------------------------------------------
+# DELETE a drawing by ID (supports customer_id + project_id)
+# -------------------------------------------------
+@file_bp.route('/files/drawings/<drawing_id>', methods=['DELETE', 'OPTIONS'])
+@token_required
+def delete_customer_drawing(drawing_id):
+    if request.method == 'OPTIONS':
+        resp = jsonify()
+        resp.headers.add('Access-Control-Allow-Origin', '*')
+        resp.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        resp.headers.add('Access-Control-Allow-Methods', 'DELETE, OPTIONS')
+        return resp
+
+    try:
+        # Find the drawing
+        drawing = DrawingDocument.query.get_or_404(drawing_id)
+
+        # Optional: Add authorization check (e.g. only same customer)
+        # if drawing.customer_id != request.current_user.customer_id:  # if applicable
+        #     return jsonify({'error': 'Unauthorized'}), 403
+
+        # 1. Delete file from disk
+        if drawing.storage_path and os.path.exists(drawing.storage_path):
+            try:
+                os.remove(drawing.storage_path)
+                current_app.logger.info(f"Deleted file: {drawing.storage_path}")
+            except Exception as e:
+                # Log the warning but proceed with DB delete
+                current_app.logger.warning(f"Could not delete file {drawing.storage_path}: {e}")
+
+        # 2. Delete DB record
+        db.session.delete(drawing)
+        db.session.commit()
+
+        return jsonify({'success': True, 'message': 'Drawing deleted successfully'}), 200
+
+    except Exception as e:
+        # Rollback the session on error
+        db.session.rollback()
+        current_app.logger.error(f"Error deleting drawing {drawing_id}: {e}", exc_info=True)
+        # 💡 DEBUG FIX: Return the detailed exception message to the client
+        return jsonify({'error': f'Failed to delete. Server error: {str(e)}'}), 500
+
 # ==========================================
 # EXISTING ROUTES (Unmodified Logic, Adjusted Paths)
 # ==========================================
