@@ -135,12 +135,22 @@ def approve_document():
             f"Document {document_id} ({doc_type}) approved by manager {request.current_user.id}"
         )
         
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         return jsonify({'success': True, 'message': 'Document approved successfully'}), 200
         
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         current_app.logger.exception(f"Error approving document: {e}")
         return jsonify({'error': 'Failed to approve document'}), 500
 
@@ -183,11 +193,21 @@ def reject_document():
             f"Document {document_id} ({doc_type}) rejected by manager {request.current_user.id}. Reason: {reason}"
         )
         
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         return jsonify({'success': True, 'message': 'Document rejected'}), 200
         
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         current_app.logger.exception(f"Error rejecting document: {e}")
         return jsonify({'error': 'Failed to reject document'}), 500

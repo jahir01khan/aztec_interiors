@@ -6,7 +6,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import create_app
-from backend.database import db
+from backend.db import SessionLocal, Base, engine
 from backend.models import Customer
 from sqlalchemy import text
 
@@ -19,7 +19,12 @@ def fix_enum_values():
         
         try:
             # Method 1: Check current data using SQLAlchemy text()
-            result = db.session.execute(
+            result = session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.execute(
                 text("SELECT id, name, preferred_contact_method FROM customers WHERE preferred_contact_method = '' OR preferred_contact_method IS NULL LIMIT 10")
             )
             
@@ -31,7 +36,12 @@ def fix_enum_values():
                     print(f"Customer ID {customer[0]}: {customer[1]} - Contact method: '{customer[2]}'")
             
             # Get total count
-            count_result = db.session.execute(
+            count_result = session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.execute(
                 text("SELECT COUNT(*) FROM customers WHERE preferred_contact_method = '' OR preferred_contact_method IS NULL")
             )
             total_invalid = count_result.scalar()
@@ -42,15 +52,30 @@ def fix_enum_values():
                 print(f"\nFixing {total_invalid} invalid enum values...")
                 
                 # Update empty strings and NULL values to a default
-                update_result = db.session.execute(
+                update_result = session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.execute(
                     text("UPDATE customers SET preferred_contact_method = 'Phone' WHERE preferred_contact_method = '' OR preferred_contact_method IS NULL")
                 )
                 
-                db.session.commit()
+                session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
                 print(f"Updated {update_result.rowcount} customer records to use 'Phone' as default")
                 
                 # Verify the fix
-                verify_result = db.session.execute(
+                verify_result = session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.execute(
                     text("SELECT COUNT(*) FROM customers WHERE preferred_contact_method = '' OR preferred_contact_method IS NULL")
                 )
                 remaining_invalid = verify_result.scalar()
@@ -65,7 +90,12 @@ def fix_enum_values():
                 
         except Exception as e:
             print(f"Error during migration: {e}")
-            db.session.rollback()
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
             return False
             
     return True
@@ -77,7 +107,12 @@ def check_database_schema():
     with app.app_context():
         try:
             # Check if the column exists and get some sample data
-            result = db.session.execute(
+            result = session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.execute(
                 text("SELECT preferred_contact_method, COUNT(*) as count FROM customers GROUP BY preferred_contact_method LIMIT 10")
             )
             
@@ -100,10 +135,20 @@ def create_backup():
     with app.app_context():
         try:
             # For SQLite, we can create a backup table
-            db.session.execute(
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.execute(
                 text("CREATE TABLE customers_backup AS SELECT * FROM customers")
             )
-            db.session.commit()
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
             print("✓ Backup table 'customers_backup' created successfully")
             return True
         except Exception as e:

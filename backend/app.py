@@ -1,180 +1,142 @@
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
-from backend.database import db, init_db
 import os
 from dotenv import load_dotenv
+from backend.db import Base, engine, SessionLocal, test_connection   # 👈 new imports
 
 load_dotenv()
 
+
 def create_app():
     app = Flask(__name__)
-    
-    # Configuration
-    app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
-    
-    # SQLite Configuration
-    db_path = os.getenv('DATABASE_PATH', 'database.db')
-    app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
-    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-    
+
     # ============================================
-    # CORS CONFIGURATION - MAXIMUM PERMISSIVE
+    # CONFIG
     # ============================================
-    CORS(app, 
-         resources={r"/*": {
-             "origins": "*",
-             "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-             "allow_headers": "*",
-             "expose_headers": "*",
-             "supports_credentials": False,
-             "max_age": 3600
-         }})
-    
+    app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
+
     # ============================================
-    # HANDLE PREFLIGHT FIRST - BEFORE ANYTHING
+    # CORS
+    # ============================================
+    CORS(
+        app,
+        resources={r"/*": {"origins": "*"}},
+        supports_credentials=False,
+    )
+
+    # ============================================
+    # PREFLIGHT HANDLER
     # ============================================
     @app.before_request
     def handle_preflight():
-        if request.method == 'OPTIONS':
-            response = jsonify({'status': 'ok'})
-            response.headers['Access-Control-Allow-Origin'] = '*'
-            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
-            response.headers['Access-Control-Allow-Headers'] = '*'
-            response.headers['Access-Control-Max-Age'] = '3600'
-            return response, 200
-    
-    # Add CORS headers to every response
-    @app.after_request
-    def after_request(response):
-        response.headers['Access-Control-Allow-Origin'] = '*'
-        response.headers['Access-Control-Allow-Headers'] = '*'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
-        response.headers['Access-Control-Max-Age'] = '3600'
-        return response
-    
+        if request.method == "OPTIONS":
+            resp = jsonify({"status": "ok"})
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            resp.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+            resp.headers["Access-Control-Allow-Headers"] = "*"
+            return resp, 200
+
     # ============================================
-    # MOCK AUTH - NO AUTHENTICATION REQUIRED
+    # AFTER-REQUEST HEADERS
+    # ============================================
+    @app.after_request
+    def add_cors_headers(resp):
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "*"
+        return resp
+
+    # ============================================
+    # MOCK AUTH
     # ============================================
     @app.before_request
     def set_mock_user():
-        """Set mock user for all requests - NO AUTH REQUIRED"""
-        if request.method == 'OPTIONS':
+        if request.method == "OPTIONS":
             return None
-            
-        # Try to get first real user from database, otherwise use mock
+
         from backend.models import User
         try:
-            first_user = User.query.first()
-            if first_user:
-                g.user = first_user
+            session = SessionLocal()
+            user = session.query(User).first()
+            session.close()
+            if user:
+                g.user = user
             else:
-                g.user = type('User', (), {
-                    'id': 1,
-                    'email': 'dev@test.com',
-                    'first_name': 'Dev',
-                    'last_name': 'User',
-                    'role': 'Manager',
-                    'is_active': True
+                g.user = type("User", (), {
+                    "id": 1,
+                    "email": "dev@test.com",
+                    "first_name": "Dev",
+                    "last_name": "User",
+                    "role": "Manager",
+                    "is_active": True,
                 })()
-        except:
-            g.user = type('User', (), {
-                'id': 1,
-                'email': 'dev@test.com',
-                'first_name': 'Dev',
-                'last_name': 'User',
-                'role': 'Manager',
-                'is_active': True
+        except Exception:
+            g.user = type("User", (), {
+                "id": 1,
+                "email": "dev@test.com",
+                "first_name": "Dev",
+                "last_name": "User",
+                "role": "Manager",
+                "is_active": True,
             })()
         return None
-    
-    # Initialize database
-    init_db(app)
-    
-    # Register blueprints
-    from backend.routes.auth_routes import auth_bp
-    from backend.routes.approvals_routes import approvals_bp
-    from backend.routes.form_routes import form_bp
-    from backend.routes.db_routes import db_bp 
-    from backend.routes.notification_routes import notification_bp
-    from backend.routes.assignment_routes import assignment_bp
-    from backend.routes.appliance_routes import appliance_bp
-    from backend.routes.customer_routes import customer_bp
-    from backend.routes.file_routes import file_bp
-    
-    app.register_blueprint(auth_bp)
-    app.register_blueprint(approvals_bp)
-    app.register_blueprint(form_bp)
-    app.register_blueprint(db_bp)
-    app.register_blueprint(notification_bp)
-    app.register_blueprint(assignment_bp)
-    app.register_blueprint(appliance_bp)
-    app.register_blueprint(customer_bp)
-    app.register_blueprint(file_bp)
-    
+
     # ============================================
-    # HEALTH CHECK ENDPOINT
+    # BLUEPRINTS
     # ============================================
-    @app.route('/health', methods=['GET'])
+    from backend.routes import (
+        auth_routes, approvals_routes, form_routes, db_routes,
+        notification_routes, assignment_routes, appliance_routes,
+        customer_routes, file_routes
+    )
+
+    app.register_blueprint(auth_routes.auth_bp)
+    app.register_blueprint(approvals_routes.approvals_bp)
+    app.register_blueprint(form_routes.form_bp)
+    app.register_blueprint(db_routes.db_bp)
+    app.register_blueprint(notification_routes.notification_bp)
+    app.register_blueprint(assignment_routes.assignment_bp)
+    app.register_blueprint(appliance_routes.appliance_bp)
+    app.register_blueprint(customer_routes.customer_bp)
+    app.register_blueprint(file_routes.file_bp)
+
+    # ============================================
+    # HEALTH CHECK
+    # ============================================
+    @app.route("/health", methods=["GET"])
     def health_check():
-        return jsonify({'status': 'ok', 'message': 'Server is running'}), 200
-    
+        return jsonify({"status": "ok", "message": "Server is running"}), 200
+
     return app
 
-if __name__ == '__main__':
+
+# ============================================
+# STANDALONE LAUNCH
+# ============================================
+if __name__ == "__main__":
     app = create_app()
-    
-    with app.app_context():
-        print("=" * 60)
-        print("🔧 INITIALIZING DATABASE...")
-        print("=" * 60)
-        
-        # Import ALL models to ensure they're registered with SQLAlchemy
-        from backend.models import (
-            User, LoginAttempt, Session, Customer, Project, Team, Fitter, 
-            Salesperson, Job, JobDocument, JobChecklist, ChecklistItem,
-            ScheduleItem, Room, RoomAppliance, JobFormLink, JobNote,
-            ApplianceCategory, Brand, Product, Quotation, QuotationItem,
-            ProductQuoteItem, Invoice, InvoiceLineItem, Payment, CountingSheet,
-            CountingItem, RemedialAction, RemedialItem, DocumentTemplate,
-            AuditLog, VersionedSnapshot, ProductionNotification, FormSubmission,
-            CustomerFormData, ApprovalNotification, DataImport, DrawingDocument,
-            Assignment
-        )
-        
-        print("✅ All models imported")
-        
-        # Force create all tables
-        db.create_all()
-        
-        # Verify tables were created
-        from sqlalchemy import inspect
-        inspector = inspect(db.engine)
-        tables = inspector.get_table_names()
-        
-        print(f"\n📋 Created {len(tables)} tables:")
-        for table in sorted(tables):
-            print(f"   ✓ {table}")
-        
-        # Check if users table exists and has data
-        if 'users' in tables:
-            user_count = User.query.count()
-            print(f"\n👤 Users in database: {user_count}")
-            
-            if user_count == 0:
-                print("\n⚠️  No users found! Run 'python backend/init_db.py' to create default users")
-            else:
-                users = User.query.all()
-                print("\n✅ Existing users:")
-                for u in users:
-                    print(f"   📧 {u.email} ({u.role})")
-        else:
-            print("\n❌ ERROR: users table was not created!")
-            print("   Please check your models.py file")
-        
-        print("\n" + "=" * 60)
-        print("✅ Database check complete!")
-        print("=" * 60)
-    
-    # Use proper production server settings
-    port = int(os.environ.get('PORT', 5000))
-    app.run(debug=True, host='0.0.0.0', port=port, threaded=True)
+
+    print("=" * 60)
+    print("🔧 INITIALISING DATABASE...")
+    print("=" * 60)
+
+    # Import models to register metadata
+    from backend import models  # ensures all classes subclass Base
+
+    # Create missing tables (safe)
+    Base.metadata.create_all(bind=engine)
+    test_connection()
+
+    # List tables
+    from sqlalchemy import inspect
+    inspector = inspect(engine)
+    tables = inspector.get_table_names()
+    print(f"\n📋 {len(tables)} tables detected:")
+    for t in tables:
+        print(f"   ✓ {t}")
+
+    print("\n✅ Database initialised successfully!\n")
+    print("=" * 60)
+
+    port = int(os.getenv("PORT", 5000))
+    app.run(debug=True, host="0.0.0.0", port=port, threaded=True)

@@ -89,8 +89,18 @@ def process_import_file(app, import_id, file_path, import_type):
                 brand = Brand.query.filter_by(name=brand_name).first()
                 if not brand:
                     brand = Brand(name=brand_name, active=True)
-                    db.session.add(brand)
-                    db.session.commit() # Commit brand to get ID
+                    session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(brand)
+                    session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit() # Commit brand to get ID
 
                 # 2. Reload DataFrame with correct header (row 5, index 4)
                 if file_path.endswith(('.xlsx', '.xls')):
@@ -110,8 +120,18 @@ def process_import_file(app, import_id, file_path, import_type):
                         category = ApplianceCategory.query.filter_by(name=product_name_category).first()
                         if not category:
                             category = ApplianceCategory(name=product_name_category, active=True)
-                            db.session.add(category)
-                            db.session.commit() # Commit category to get ID
+                            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(category)
+                            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit() # Commit category to get ID
 
                         # Helper to process a single product entry
                         def process_entry(model_codes_str, series, price, tier):
@@ -132,7 +152,12 @@ def process_import_file(app, import_id, file_path, import_type):
                                         active=True,
                                         in_stock=True
                                     )
-                                    db.session.add(product)
+                                    session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(product)
                                 
                                 product.brand_id = brand.id
                                 product.category_id = category.id
@@ -165,10 +190,20 @@ def process_import_file(app, import_id, file_path, import_type):
                         # Process HIGH tier (cols 9, 10, 11)
                         processed_count += process_entry(row.iloc[9], row.iloc[10], row.iloc[11], 'high')
                         
-                        db.session.commit() # Commit after each row (batch of 1-3 products)
+                        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit() # Commit after each row (batch of 1-3 products)
 
                     except Exception as row_e:
-                        db.session.rollback()
+                        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
                         failed_count += 1
                         error_log.append(f"Row {index + 6}: {str(row_e)}") # +6 = 1-based index + 5 header rows
 
@@ -206,11 +241,21 @@ def process_import_file(app, import_id, file_path, import_type):
                         processed_count += 1
                         
                     except Exception as row_e:
-                        db.session.rollback()
+                        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
                         failed_count += 1
                         error_log.append(f"Row {index + 4}: {str(row_e)}") # +4 = 1-based + 3 header rows
                 
-                db.session.commit()
+                session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
 
             # --- Import finished, update the job status ---
             import_record.status = 'completed'
@@ -220,13 +265,23 @@ def process_import_file(app, import_id, file_path, import_type):
             
         except Exception as e:
             # Fatal error (e.g., file read error)
-            db.session.rollback()
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
             import_record.status = 'failed'
             import_record.error_log = f"Fatal Error: {str(e)}"
         
         finally:
             import_record.completed_at = datetime.utcnow()
-            db.session.commit()
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
 
 # Product endpoints
 @appliance_bp.route('/products', methods=['GET'])
@@ -353,12 +408,27 @@ def create_product():
             lead_time_weeks=data.get('lead_time_weeks')
         )
         
-        db.session.add(product)
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(product)
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         return jsonify(serialize_product(product)), 201
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         return jsonify({'error': str(e)}), 500
 
 @appliance_bp.route('/products/<int:product_id>', methods=['PUT'])
@@ -391,11 +461,21 @@ def update_product(product_id):
         #     product.model_code = data['model_code']
         
         product.updated_at = datetime.utcnow()
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         return jsonify(serialize_product(product))
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         return jsonify({'error': str(e)}), 500
 
 @appliance_bp.route('/products/<int:product_id>', methods=['DELETE'])
@@ -405,11 +485,21 @@ def delete_product(product_id):
         product = Product.query.get_or_404(product_id)
         product.active = False
         product.updated_at = datetime.utcnow()
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         return jsonify({'message': 'Product deactivated successfully'})
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         return jsonify({'error': str(e)}), 500
 
 # Brand endpoints
@@ -456,8 +546,18 @@ def create_brand():
             active=data.get('active', True)
         )
         
-        db.session.add(brand)
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(brand)
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         return jsonify({
             'id': brand.id,
@@ -467,7 +567,12 @@ def create_brand():
             'active': brand.active
         }), 201
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         return jsonify({'error': str(e)}), 500
 
 # Category endpoints
@@ -512,8 +617,18 @@ def create_category():
             active=data.get('active', True)
         )
         
-        db.session.add(category)
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(category)
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         return jsonify({
             'id': category.id,
@@ -522,7 +637,12 @@ def create_category():
             'active': category.active
         }), 201
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         return jsonify({'error': str(e)}), 500
 
 # Price tier endpoint
@@ -611,8 +731,18 @@ def upload_import_file():
             imported_by=request.form.get('imported_by', 'System')
             # Status will be 'processing' by default
         )
-        db.session.add(import_record)
-        db.session.commit() # Commit to get the ID
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(import_record)
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit() # Commit to get the ID
 
         # --- START THE BACKGROUND WORKER ---
         worker_thread = threading.Thread(
@@ -629,7 +759,12 @@ def upload_import_file():
         }), 201
         
     except Exception as e:
-        db.session.rollback() # Rollback if import_record creation fails
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback() # Rollback if import_record creation fails
         return jsonify({'error': str(e)}), 500
 
 @appliance_bp.route('/import/<int:import_id>/status', methods=['GET'])

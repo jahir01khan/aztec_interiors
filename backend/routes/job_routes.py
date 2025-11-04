@@ -157,8 +157,18 @@
 #             has_invoice=data.get('generate_invoice', False)
 #         )
         
-#         db.session.add(job)
-#         db.session.flush()
+#         session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(job)
+#         session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.flush()
         
 #         print(f"Created job with ID: {job.id}")
         
@@ -171,7 +181,12 @@
 #                     form_submission_id=form_id,
 #                     linked_by=data.get('created_by', 'System')
 #                 )
-#                 db.session.add(form_link)
+#                 session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(form_link)
 #             except Exception as e:
 #                 print(f"Error linking form {form_id}: {e}")
         
@@ -184,17 +199,32 @@
 #                     note_type='general',
 #                     author=data.get('created_by', 'System')
 #                 )
-#                 db.session.add(initial_note)
+#                 session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(initial_note)
 #             except Exception as e:
 #                 print(f"Error creating initial note: {e}")
         
-#         db.session.commit()
+#         session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
 #         return jsonify(serialize_job(job)), 201
         
 #     except Exception as e:
 #         print(f"Error creating job: {str(e)}")
-#         db.session.rollback()
+#         session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
 #         return jsonify({'error': str(e)}), 500
 
 # @job_bp.route('/jobs/<int:job_id>', methods=['PUT'])
@@ -232,11 +262,21 @@
         
 #         job.updated_at = datetime.utcnow()
         
-#         db.session.commit()
+#         session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
 #         return jsonify(serialize_job(job))
 #     except Exception as e:
-#         db.session.rollback()
+#         session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
 #         return jsonify({'error': str(e)}), 500
 
 # @job_bp.route('/jobs/<int:job_id>', methods=['DELETE'])
@@ -244,11 +284,26 @@
 #     """Delete a job"""
 #     try:
 #         job = Job.query.get_or_404(job_id)
-#         db.session.delete(job)
-#         db.session.commit()
+#         session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.delete(job)
+#         session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
 #         return jsonify({'message': 'Job deleted successfully'})
 #     except Exception as e:
-#         db.session.rollback()
+#         session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
 #         return jsonify({'error': str(e)}), 500
 
 # @job_bp.route('/jobs/<int:job_id>/notes', methods=['GET'])
@@ -285,8 +340,18 @@
 #             author=data.get('author', 'System')
 #         )
         
-#         db.session.add(note)
-#         db.session.commit()
+#         session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(note)
+#         session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
 #         return jsonify({
 #             'id': note.id,
@@ -296,7 +361,12 @@
 #             'created_at': note.created_at.isoformat()
 #         }), 201
 #     except Exception as e:
-#         db.session.rollback()
+#         session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
 #         return jsonify({'error': str(e)}), 500
 
 # @job_bp.route('/jobs/<int:job_id>/documents', methods=['GET'])
@@ -340,13 +410,28 @@
 #             note_type='system',
 #             author=data.get('updated_by', 'System')
 #         )
-#         db.session.add(stage_note)
+#         session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(stage_note)
         
-#         db.session.commit()
+#         session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
 #         return jsonify(serialize_job(job))
 #     except Exception as e:
-#         db.session.rollback()
+#         session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
 #         return jsonify({'error': str(e)}), 500
 
 # # Supporting endpoints for form data
@@ -398,7 +483,12 @@
 #         customer_id = request.args.get('customer_id')
         
 #         # Subquery to get form IDs that are already linked to jobs
-#         linked_form_ids = db.session.query(JobFormLink.form_submission_id).subquery()
+#         linked_form_ids = session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.query(JobFormLink.form_submission_id).subquery()
         
 #         # Query for unlinked forms
 #         query = FormSubmission.query.filter(
@@ -448,7 +538,12 @@
 #         }
         
 #         # Jobs by stage
-#         stage_counts = db.session.query(
+#         stage_counts = session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.query(
 #             Job.stage, 
 #             db.func.count(Job.id)
 #         ).group_by(Job.stage).all()
@@ -457,7 +552,12 @@
 #             stats['by_stage'][stage] = count
         
 #         # Jobs by type
-#         type_counts = db.session.query(
+#         type_counts = session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.query(
 #             Job.type, 
 #             db.func.count(Job.id)
 #         ).group_by(Job.type).all()
@@ -466,7 +566,12 @@
 #             stats['by_type'][job_type] = count
         
 #         # Jobs by priority
-#         priority_counts = db.session.query(
+#         priority_counts = session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.query(
 #             Job.priority, 
 #             db.func.count(Job.id)
 #         ).group_by(Job.priority).all()

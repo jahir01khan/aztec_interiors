@@ -10,7 +10,8 @@ def setup_authentication():
         print("Setting up Authentication System...")
         
         # Create tables
-        db.create_all()
+        Base.metadata.create_all(bind=engine)
+
         
         # Create demo admin user
         admin_email = "admin@aztecinteriors.com"
@@ -25,7 +26,12 @@ def setup_authentication():
                 is_verified=True
             )
             admin_user.set_password("Admin123!")
-            db.session.add(admin_user)
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(admin_user)
             print(f"✅ Created admin user: {admin_email}")
         
         # Create demo regular user
@@ -42,7 +48,12 @@ def setup_authentication():
                 is_verified=True
             )
             demo_user.set_password("Demo123!")
-            db.session.add(demo_user)
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(demo_user)
             print(f"✅ Created demo user: {demo_email}")
         
         # Create sample users for different roles
@@ -86,10 +97,20 @@ def setup_authentication():
                     is_verified=True
                 )
                 user.set_password("Password123!")
-                db.session.add(user)
+                session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(user)
                 print(f"✅ Created user: {user_data['email']}")
         
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         print("\n" + "="*50)
         print("🔐 AUTHENTICATION SETUP COMPLETED")

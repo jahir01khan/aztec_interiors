@@ -23,14 +23,14 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
 # Customer Model
-class Customer(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    address = db.Column(db.Text, nullable=True)
-    phone = db.Column(db.String(20), nullable=True)
-    email = db.Column(db.String(100), nullable=True)
-    status = db.Column(db.String(50), default='Active')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+class Customer(Base):
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False)
+    address = Column(Text, nullable=True)
+    phone = Column(String(20), nullable=True)
+    email = Column(String(100), nullable=True)
+    status = Column(String(50), default='Active')
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 # In-memory storage for form tokens
 form_tokens = {}
@@ -61,8 +61,18 @@ def handle_customers():
             email=data.get('email', ''),
             status=data.get('status', 'Active')
         )
-        db.session.add(new_customer)
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(new_customer)
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         return jsonify({'id': new_customer.id}), 201
     
     customers = Customer.query.all()
@@ -222,8 +232,18 @@ def submit_customer_form():
             status='New Lead'
         )
         
-        db.session.add(new_customer)
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(new_customer)
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         # Mark token as used
         form_tokens[token]['used'] = True
@@ -239,7 +259,12 @@ def submit_customer_form():
         
     except Exception as e:
         print(f"❌ Error submitting customer form: {str(e)}")
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         return jsonify({
             'success': False,
             'error': f'Form submission failed: {str(e)}'
@@ -259,7 +284,8 @@ if __name__ == '__main__':
     
     # Create database tables
     with app.app_context():
-        db.create_all()
+        Base.metadata.create_all(bind=engine)
+
         print("✅ Database tables created!")
     
     # Add some test data if no customers exist
@@ -270,8 +296,18 @@ if __name__ == '__main__':
                 Customer(name="Jane Doe", phone="987-654-3210", address="456 Oak Ave", status="New Lead"),
             ]
             for customer in test_customers:
-                db.session.add(customer)
-            db.session.commit()
+                session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(customer)
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
             print("✅ Added test customers!")
     
     print("📍 Server starting at: http://127.0.0.1:5000")

@@ -1,109 +1,93 @@
-# models.py - Complete schema with Multiple Projects Per Customer support
-# Key Changes:
-# - Added Project model for one-to-many relationship with Customer
-# - Customer can have multiple Projects (bedroom, kitchen, etc.)
-# - CustomerFormData now requires project_id to link forms to specific projects
-# - All other models remain unchanged
-
 import uuid
 import secrets
 from datetime import datetime, timedelta
-
-from backend.database import db  # Import SQLAlchemy instance
+from sqlalchemy import (
+    Column, Integer, String, Boolean, DateTime, Date, Enum, ForeignKey, Text, JSON, Numeric, Float, Time
+)
+from sqlalchemy.orm import relationship
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
+
+from backend.db import Base  # ✅ use declarative Base from db.py
 
 # ----------------------------------
 # Helpers / Enums
 # ----------------------------------
 
-JOB_STAGE_ENUM = db.Enum(
+JOB_STAGE_ENUM = Enum(
     'Lead', 'Quote', 'Consultation', 'Survey', 'Measure', 'Design', 'Quoted', 'Accepted',
     'OnHold', 'Production', 'Delivery', 'Installation', 'Complete', 'Remedial', 'Cancelled',
     name='job_stage_enum'
 )
 
-JOB_TYPE_ENUM = db.Enum(
+JOB_TYPE_ENUM = Enum(
     'Kitchen', 'Bedroom', 'Wardrobe', 'Remedial', 'Other',
     name='job_type_enum'
 )
 
-CONTACT_MADE_ENUM = db.Enum('Yes', 'No', 'Unknown', name='contact_made_enum')
-PREFERRED_CONTACT_ENUM = db.Enum('Phone', 'Email', 'WhatsApp', name='preferred_contact_enum')
+CONTACT_MADE_ENUM = Enum('Yes', 'No', 'Unknown', name='contact_made_enum')
+PREFERRED_CONTACT_ENUM = Enum('Phone', 'Email', 'WhatsApp', name='preferred_contact_enum')
 
-CHECKLIST_TEMPLATE_ENUM = db.Enum(
+CHECKLIST_TEMPLATE_ENUM = Enum(
     'BedroomChecklist', 'KitchenChecklist', 'PaymentTerms', 'CustomerSatisfaction',
     'RemedialAction', 'PromotionalOffer', name='checklist_template_enum'
 )
 
-DOCUMENT_TEMPLATE_TYPE_ENUM = db.Enum(
+DOCUMENT_TEMPLATE_TYPE_ENUM = Enum(
     'Invoice', 'Receipt', 'Quotation', 'Warranty', 'Terms', 'Other', name='document_template_type_enum'
 )
 
-PAYMENT_METHOD_ENUM = db.Enum('BACS', 'Cash', 'Card', 'Other', name='payment_method_enum')
+PAYMENT_METHOD_ENUM = Enum('BACS', 'Cash', 'Card', 'Other', name='payment_method_enum')
 
-AUDIT_ACTION_ENUM = db.Enum('create', 'update', 'delete', name='audit_action_enum')
+AUDIT_ACTION_ENUM = Enum('create', 'update', 'delete', name='audit_action_enum')
 
-APPROVAL_STATUS_ENUM = db.Enum('pending', 'approved', 'rejected', name='approval_status_enum')
+APPROVAL_STATUS_ENUM = Enum('pending', 'approved', 'rejected', name='approval_status_enum')
 
-ASSIGNMENT_TYPE_ENUM = db.Enum('job', 'off', 'delivery', 'note', name='assignment_type_enum')
+ASSIGNMENT_TYPE_ENUM = Enum('job', 'off', 'delivery', 'note', name='assignment_type_enum')
 
 # ----------------------------------
 # Auth & Security
 # ----------------------------------
 
-class User(db.Model):
+class User(Base):
     __tablename__ = 'users'
 
-    id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String(120), unique=True, nullable=False, index=True)
-    password_hash = db.Column(db.String(255), nullable=False)
+    id = Column(Integer, primary_key=True)
+    email = Column(String(120), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
 
-    # Profile
-    first_name = db.Column(db.String(50), nullable=False)
-    last_name = db.Column(db.String(50), nullable=False)
-    phone = db.Column(db.String(20))
+    first_name = Column(String(50), nullable=False)
+    last_name = Column(String(50), nullable=False)
+    phone = Column(String(20))
 
-    # Role & permissions
-    role = db.Column(db.String(20), default='user')
-    department = db.Column(db.String(50))
+    role = Column(String(20), default='user')
+    department = Column(String(50))
 
-    # Account status
-    is_active = db.Column(db.Boolean, default=True)
-    is_verified = db.Column(db.Boolean, default=False)
+    is_active = Column(Boolean, default=True)
+    is_verified = Column(Boolean, default=False)
 
-    # Timestamps
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    last_login = db.Column(db.DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_login = Column(DateTime)
 
-    # Password reset
-    reset_token = db.Column(db.String(100))
-    reset_token_expires = db.Column(db.DateTime)
+    reset_token = Column(String(100))
+    reset_token_expires = Column(DateTime)
 
-    # Email verification
-    verification_token = db.Column(db.String(100))
+    verification_token = Column(String(100))
 
     def __repr__(self):
         return f'<User {self.email}>'
 
-    # Password utils
     def set_password(self, password: str) -> None:
         self.password_hash = generate_password_hash(password)
 
     def check_password(self, password: str) -> bool:
         return check_password_hash(self.password_hash, password)
 
-    def get_full_name(self) -> str:
-        return f"{self.first_name} {self.last_name}"
-
-    # ✅ ADD THIS PROPERTY
     @property
     def full_name(self):
-        """Return full name of user - property for direct access"""
         return f"{self.first_name} {self.last_name}"
 
-    # Tokens
     def generate_reset_token(self) -> str:
         self.reset_token = secrets.token_urlsafe(32)
         self.reset_token_expires = datetime.utcnow() + timedelta(hours=1)
@@ -125,9 +109,13 @@ class User(db.Model):
 
     @staticmethod
     def verify_jwt_token(token: str, secret_key: str):
+        from backend.db import SessionLocal
+
         try:
             payload = jwt.decode(token, secret_key, algorithms=['HS256'])
-            user = User.query.get(payload['user_id'])
+            session = SessionLocal()
+            user = session.get(User, payload['user_id'])
+            session.close()
             return user if user and user.is_active else None
         except jwt.ExpiredSignatureError:
             return None
@@ -140,7 +128,7 @@ class User(db.Model):
             'email': self.email,
             'first_name': self.first_name,
             'last_name': self.last_name,
-            'full_name': self.full_name,  # ✅ Now works as property
+            'full_name': self.full_name,
             'phone': self.phone,
             'role': self.role,
             'department': self.department,
@@ -151,31 +139,31 @@ class User(db.Model):
         }
 
 
-class LoginAttempt(db.Model):
+class LoginAttempt(Base):
     __tablename__ = 'login_attempts'
 
-    id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String(120), nullable=False, index=True)
-    ip_address = db.Column(db.String(45), nullable=False)
-    success = db.Column(db.Boolean, default=False)
-    attempted_at = db.Column(db.DateTime, default=datetime.utcnow)
+    id = Column(Integer, primary_key=True)
+    email = Column(String(120), nullable=False, index=True)
+    ip_address = Column(String(45), nullable=False)
+    success = Column(Boolean, default=False)
+    attempted_at = Column(DateTime, default=datetime.utcnow)
 
     def __repr__(self):
         return f'<LoginAttempt {self.email} - {"Success" if self.success else "Failed"}>'
 
 
-class Session(db.Model):
+class Session(Base):
     __tablename__ = 'user_sessions'
 
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    session_token = db.Column(db.String(255), unique=True, nullable=False)
-    ip_address = db.Column(db.String(45))
-    user_agent = db.Column(db.Text)
-    expires_at = db.Column(db.DateTime, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    session_token = Column(String(255), unique=True, nullable=False)
+    ip_address = Column(String(45))
+    user_agent = Column(Text)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    user = db.relationship('User', backref='sessions')
+    user = relationship('User', backref='sessions')
 
     def is_expired(self) -> bool:
         return datetime.utcnow() > self.expires_at
@@ -185,45 +173,45 @@ class Session(db.Model):
 # Core CRM Entities
 # ----------------------------------
 
-class Customer(db.Model):
+class Customer(Base):
     __tablename__ = 'customers'
 
-    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    date_of_measure = db.Column(db.Date)
-    name = db.Column(db.String(200), nullable=False)
-    address = db.Column(db.Text)
-    postcode = db.Column(db.String(20))
-    phone = db.Column(db.String(50))
-    email = db.Column(db.String(200))
-    contact_made = db.Column(CONTACT_MADE_ENUM, default='Unknown')
-    preferred_contact_method = db.Column(PREFERRED_CONTACT_ENUM)
-    marketing_opt_in = db.Column(db.Boolean, default=False)
-    notes = db.Column(db.Text)
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    date_of_measure = Column(Date)
+    name = Column(String(200), nullable=False)
+    address = Column(Text)
+    postcode = Column(String(20))
+    phone = Column(String(50))
+    email = Column(String(200))
+    contact_made = Column(CONTACT_MADE_ENUM, default='Unknown')
+    preferred_contact_method = Column(PREFERRED_CONTACT_ENUM)
+    marketing_opt_in = Column(Boolean, default=False)
+    notes = Column(Text)
     
     # Stage field that can mirror project stages
-    stage = db.Column(JOB_STAGE_ENUM, default='Lead')
+    stage = Column(JOB_STAGE_ENUM, default='Lead')
 
     # Project types and salesperson
-    project_types = db.Column(db.JSON)  # Can store ["Bedroom", "Kitchen"] etc.
-    salesperson = db.Column(db.String(200))
+    project_types = Column(JSON)  # Can store ["Bedroom", "Kitchen"] etc.
+    salesperson = Column(String(200))
 
     # Audit
-    created_by = db.Column(db.String(200))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_by = db.Column(db.String(200))
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_by = Column(String(200))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_by = Column(String(200))
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Status flag
-    status = db.Column(db.String(50), default='Active')
+    status = Column(String(50), default='Active')
 
-    # Relationships
+    # relationships
     # NEW: One-to-Many relationship with Projects
-    projects = db.relationship('Project', back_populates='customer', lazy=True, cascade='all, delete-orphan')
+    projects = relationship('Project', back_populates='customer', lazy=True, cascade='all, delete-orphan')
     
-    jobs = db.relationship('Job', back_populates='customer', lazy=True, cascade='all, delete-orphan')
-    quotations = db.relationship('Quotation', back_populates='customer', lazy=True, cascade='all, delete-orphan')
-    form_data = db.relationship('CustomerFormData', back_populates='customer', lazy=True, cascade='all, delete-orphan')
-    form_submissions = db.relationship('FormSubmission', back_populates='customer', lazy=True)
+    jobs = relationship('Job', back_populates='customer', lazy=True, cascade='all, delete-orphan')
+    quotations = relationship('Quotation', back_populates='customer', lazy=True, cascade='all, delete-orphan')
+    form_data = relationship('CustomerFormData', back_populates='customer', lazy=True, cascade='all, delete-orphan')
+    form_submissions = relationship('FormSubmission', back_populates='customer', lazy=True)
 
     def extract_postcode_from_address(self):
         if not self.address:
@@ -238,7 +226,10 @@ class Customer(db.Model):
         primary_job = self.get_primary_job()
         if primary_job:
             self.stage = primary_job.stage
-            db.session.commit()
+            session = SessionLocal()
+            session.add(...)
+            session.commit()
+            session.close()
 
     def get_primary_job(self):
         """Get the customer's primary (most recent or active) job"""
@@ -247,8 +238,15 @@ class Customer(db.Model):
     def save(self):
         if not self.postcode and self.address:
             self.postcode = self.extract_postcode_from_address()
-        db.session.add(self)
-        db.session.commit()
+        session = SessionLocal()
+        session.add(...)
+        session.commit()
+        session.close()
+        
+        session = SessionLocal()
+        session.add(...)
+        session.commit()
+        session.close()
 
     def to_dict(self, include_projects=False):
         """Convert customer to dictionary with optional project inclusion"""
@@ -285,30 +283,30 @@ class Customer(db.Model):
 
 
 # NEW MODEL: Project - Allows multiple projects per customer
-class Project(db.Model):
+class Project(Base):
     __tablename__ = 'projects'
 
-    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     
     # FOREIGN KEY: Links to Customer (many-to-one)
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=False)
+    customer_id = Column(String(36), ForeignKey('customers.id'), nullable=False)
     
     # Project details
-    project_name = db.Column(db.String(200), nullable=False)
-    project_type = db.Column(JOB_TYPE_ENUM, nullable=False)  # Kitchen, Bedroom, Wardrobe, etc.
-    stage = db.Column(JOB_STAGE_ENUM, default='Lead')
-    date_of_measure = db.Column(db.Date)
-    notes = db.Column(db.Text)
+    project_name = Column(String(200), nullable=False)
+    project_type = Column(JOB_TYPE_ENUM, nullable=False)  # Kitchen, Bedroom, Wardrobe, etc.
+    stage = Column(JOB_STAGE_ENUM, default='Lead')
+    date_of_measure = Column(Date)
+    notes = Column(Text)
     
     # Audit
-    created_by = db.Column(db.String(200))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_by = db.Column(db.String(200))
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_by = Column(String(200))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_by = Column(String(200))
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # RELATIONSHIPS
-    customer = db.relationship('Customer', back_populates='projects')
-    form_submissions = db.relationship('CustomerFormData', back_populates='project', lazy=True, cascade='all, delete-orphan')
+    # relationshipS
+    customer = relationship('Customer', back_populates='projects')
+    form_submissions = relationship('CustomerFormData', back_populates='project', lazy=True, cascade='all, delete-orphan')
 
     def __repr__(self):
         return f'<Project {self.id}: {self.project_name} for Customer {self.customer_id}>'
@@ -336,108 +334,108 @@ class Project(db.Model):
         return data
 
 
-class Team(db.Model):
+class Team(Base):
     __tablename__ = 'teams'
 
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(200), nullable=False)
-    specialty = db.Column(db.String(100))
-    active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200), nullable=False)
+    specialty = Column(String(100))
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    members = db.relationship('Fitter', back_populates='team', lazy=True)
+    members = relationship('Fitter', back_populates='team', lazy=True)
 
 
-class Fitter(db.Model):
+class Fitter(Base):
     __tablename__ = 'fitters'
 
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(200), nullable=False)
-    team_id = db.Column(db.Integer, db.ForeignKey('teams.id'))
-    skills = db.Column(db.Text)
-    active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200), nullable=False)
+    team_id = Column(Integer, ForeignKey('teams.id'))
+    skills = Column(Text)
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    team = db.relationship('Team', back_populates='members')
+    team = relationship('Team', back_populates='members')
 
 
-class Salesperson(db.Model):
+class Salesperson(Base):
     __tablename__ = 'salespeople'
 
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(200), nullable=False)
-    email = db.Column(db.String(120))
-    phone = db.Column(db.String(20))
-    active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    id = Column(Integer, primary_key=True)
+    name = Column(String(200), nullable=False)
+    email = Column(String(120))
+    phone = Column(String(20))
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
-class Job(db.Model):
+class Job(Base):
     __tablename__ = 'jobs'
 
-    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))  # UUID
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=False)
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))  # UUID
+    customer_id = Column(String(36), ForeignKey('customers.id'), nullable=False)
 
     # Basic job info
-    job_reference = db.Column(db.String(100), unique=True)
-    job_name = db.Column(db.String(200))
-    job_type = db.Column(JOB_TYPE_ENUM, nullable=False, default='Kitchen')
-    stage = db.Column(JOB_STAGE_ENUM, nullable=False, default='Lead')
-    priority = db.Column(db.String(20), default='Medium')
+    job_reference = Column(String(100), unique=True)
+    job_name = Column(String(200))
+    job_type = Column(JOB_TYPE_ENUM, nullable=False, default='Kitchen')
+    stage = Column(JOB_STAGE_ENUM, nullable=False, default='Lead')
+    priority = Column(String(20), default='Medium')
 
     # Pricing
-    quote_price = db.Column(db.Numeric(10, 2))
-    agreed_price = db.Column(db.Numeric(10, 2))
-    sold_amount = db.Column(db.Numeric(10, 2))
-    deposit1 = db.Column(db.Numeric(10, 2))
-    deposit2 = db.Column(db.Numeric(10, 2))
+    quote_price = Column(Numeric(10, 2))
+    agreed_price = Column(Numeric(10, 2))
+    sold_amount = Column(Numeric(10, 2))
+    deposit1 = Column(Numeric(10, 2))
+    deposit2 = Column(Numeric(10, 2))
 
     # Dates
-    delivery_date = db.Column(db.DateTime)
-    measure_date = db.Column(db.DateTime)
-    completion_date = db.Column(db.DateTime)
-    deposit_due_date = db.Column(db.DateTime)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    delivery_date = Column(DateTime)
+    measure_date = Column(DateTime)
+    completion_date = Column(DateTime)
+    deposit_due_date = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Additional info
-    installation_address = db.Column(db.Text)
-    notes = db.Column(db.Text)
+    installation_address = Column(Text)
+    notes = Column(Text)
 
     # Team assignments
-    salesperson_name = db.Column(db.String(100))
-    assigned_team_name = db.Column(db.String(100))
-    primary_fitter_name = db.Column(db.String(100))
+    salesperson_name = Column(String(100))
+    assigned_team_name = Column(String(100))
+    primary_fitter_name = Column(String(100))
 
-    assigned_team_id = db.Column(db.Integer, db.ForeignKey('teams.id'))
-    primary_fitter_id = db.Column(db.Integer, db.ForeignKey('fitters.id'))
-    salesperson_id = db.Column(db.Integer, db.ForeignKey('salespeople.id'))
+    assigned_team_id = Column(Integer, ForeignKey('teams.id'))
+    primary_fitter_id = Column(Integer, ForeignKey('fitters.id'))
+    salesperson_id = Column(Integer, ForeignKey('salespeople.id'))
 
     # Links
-    quote_id = db.Column(db.Integer, db.ForeignKey('quotations.id'))
+    quote_id = Column(Integer, ForeignKey('quotations.id'))
 
     # Boolean flags
-    has_counting_sheet = db.Column(db.Boolean, default=False)
-    has_schedule = db.Column(db.Boolean, default=False)
-    has_invoice = db.Column(db.Boolean, default=False)
+    has_counting_sheet = Column(Boolean, default=False)
+    has_schedule = Column(Boolean, default=False)
+    has_invoice = Column(Boolean, default=False)
 
-    # Relationships
-    customer = db.relationship('Customer', back_populates='jobs')
-    quotation = db.relationship('Quotation', foreign_keys=[quote_id], back_populates='job', uselist=False)
-    assigned_team = db.relationship('Team', foreign_keys=[assigned_team_id])
-    primary_fitter = db.relationship('Fitter', foreign_keys=[primary_fitter_id])
-    salesperson = db.relationship('Salesperson', foreign_keys=[salesperson_id])
+    # relationships
+    customer = relationship('Customer', back_populates='jobs')
+    quotation = relationship('Quotation', foreign_keys=[quote_id], back_populates='job', uselist=False)
+    assigned_team = relationship('Team', foreign_keys=[assigned_team_id])
+    primary_fitter = relationship('Fitter', foreign_keys=[primary_fitter_id])
+    salesperson = relationship('Salesperson', foreign_keys=[salesperson_id])
 
-    documents = db.relationship('JobDocument', back_populates='job', lazy=True, cascade='all, delete-orphan')
-    checklists = db.relationship('JobChecklist', back_populates='job', lazy=True, cascade='all, delete-orphan')
-    schedule_items = db.relationship('ScheduleItem', back_populates='job', lazy=True, cascade='all, delete-orphan')
-    rooms = db.relationship('Room', back_populates='job', lazy=True, cascade='all, delete-orphan')
-    form_links = db.relationship('JobFormLink', back_populates='job', lazy=True, cascade='all, delete-orphan')
-    job_notes = db.relationship('JobNote', back_populates='job', lazy=True, cascade='all, delete-orphan')
-    invoices = db.relationship('Invoice', back_populates='job', lazy=True, cascade='all, delete-orphan')
-    counting_sheets = db.relationship('CountingSheet', back_populates='job', lazy=True, cascade='all, delete-orphan')
-    remedials = db.relationship('RemedialAction', back_populates='job', lazy=True, cascade='all, delete-orphan')
-    payments = db.relationship('Payment', back_populates='job', lazy=True, cascade='all, delete-orphan')
+    documents = relationship('JobDocument', back_populates='job', lazy=True, cascade='all, delete-orphan')
+    checklists = relationship('JobChecklist', back_populates='job', lazy=True, cascade='all, delete-orphan')
+    schedule_items = relationship('ScheduleItem', back_populates='job', lazy=True, cascade='all, delete-orphan')
+    rooms = relationship('Room', back_populates='job', lazy=True, cascade='all, delete-orphan')
+    form_links = relationship('JobFormLink', back_populates='job', lazy=True, cascade='all, delete-orphan')
+    job_notes = relationship('JobNote', back_populates='job', lazy=True, cascade='all, delete-orphan')
+    invoices = relationship('Invoice', back_populates='job', lazy=True, cascade='all, delete-orphan')
+    counting_sheets = relationship('CountingSheet', back_populates='job', lazy=True, cascade='all, delete-orphan')
+    remedials = relationship('RemedialAction', back_populates='job', lazy=True, cascade='all, delete-orphan')
+    payments = relationship('Payment', back_populates='job', lazy=True, cascade='all, delete-orphan')
 
     def __repr__(self):
         return f'<Job {self.job_reference or self.id}: {self.job_name or self.job_type}>'
@@ -447,206 +445,206 @@ class Job(db.Model):
 # Documents / Checklists / Rooms
 # ----------------------------------
 
-class JobDocument(db.Model):
+class JobDocument(Base):
     __tablename__ = 'job_documents'
 
-    id = db.Column(db.Integer, primary_key=True)
-    job_id = db.Column(db.String(36), db.ForeignKey('jobs.id'), nullable=False)
-    filename = db.Column(db.String(255), nullable=False)
-    original_filename = db.Column(db.String(255), nullable=False)
-    file_path = db.Column(db.String(500), nullable=False)
-    file_size = db.Column(db.Integer)
-    mime_type = db.Column(db.String(100))
-    category = db.Column(db.String(50))
-    uploaded_by = db.Column(db.String(200))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    id = Column(Integer, primary_key=True)
+    job_id = Column(String(36), ForeignKey('jobs.id'), nullable=False)
+    filename = Column(String(255), nullable=False)
+    original_filename = Column(String(255), nullable=False)
+    file_path = Column(String(500), nullable=False)
+    file_size = Column(Integer)
+    mime_type = Column(String(100))
+    category = Column(String(50))
+    uploaded_by = Column(String(200))
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    job = db.relationship('Job', back_populates='documents')
+    job = relationship('Job', back_populates='documents')
 
 
-class JobChecklist(db.Model):
+class JobChecklist(Base):
     __tablename__ = 'job_checklists'
 
-    id = db.Column(db.Integer, primary_key=True)
-    job_id = db.Column(db.String(36), db.ForeignKey('jobs.id'), nullable=False)
-    name = db.Column(db.String(200), nullable=False)
-    description = db.Column(db.Text)
-    template_type = db.Column(CHECKLIST_TEMPLATE_ENUM, nullable=True)
-    template_version = db.Column(db.Integer, default=1)
-    status = db.Column(db.String(20), default='Not Started')
-    filled_by = db.Column(db.String(200))
-    filled_at = db.Column(db.DateTime)
-    fields = db.Column(db.JSON)  # JSON key/value for flexible templates
-    signed = db.Column(db.Boolean, default=False)
-    signature_path = db.Column(db.String(500))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    id = Column(Integer, primary_key=True)
+    job_id = Column(String(36), ForeignKey('jobs.id'), nullable=False)
+    name = Column(String(200), nullable=False)
+    description = Column(Text)
+    template_type = Column(CHECKLIST_TEMPLATE_ENUM, nullable=True)
+    template_version = Column(Integer, default=1)
+    status = Column(String(20), default='Not Started')
+    filled_by = Column(String(200))
+    filled_at = Column(DateTime)
+    fields = Column(JSON)  # JSON key/value for flexible templates
+    signed = Column(Boolean, default=False)
+    signature_path = Column(String(500))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    job = db.relationship('Job', back_populates='checklists')
-    items = db.relationship('ChecklistItem', back_populates='checklist', lazy=True, cascade='all, delete-orphan')
+    job = relationship('Job', back_populates='checklists')
+    items = relationship('ChecklistItem', back_populates='checklist', lazy=True, cascade='all, delete-orphan')
 
 
-class ChecklistItem(db.Model):
+class ChecklistItem(Base):
     __tablename__ = 'checklist_items'
 
-    id = db.Column(db.Integer, primary_key=True)
-    checklist_id = db.Column(db.Integer, db.ForeignKey('job_checklists.id'), nullable=False)
-    text = db.Column(db.String(255), nullable=False)
-    checked = db.Column(db.Boolean, default=False)
-    order_index = db.Column(db.Integer, default=0)
+    id = Column(Integer, primary_key=True)
+    checklist_id = Column(Integer, ForeignKey('job_checklists.id'), nullable=False)
+    text = Column(String(255), nullable=False)
+    checked = Column(Boolean, default=False)
+    order_index = Column(Integer, default=0)
 
-    checklist = db.relationship('JobChecklist', back_populates='items')
+    checklist = relationship('JobChecklist', back_populates='items')
 
 
-class ScheduleItem(db.Model):
+class ScheduleItem(Base):
     __tablename__ = 'schedule_items'
 
-    id = db.Column(db.Integer, primary_key=True)
-    job_id = db.Column(db.String(36), db.ForeignKey('jobs.id'), nullable=False)
-    title = db.Column(db.String(200), nullable=False)
-    description = db.Column(db.Text)
-    start_date = db.Column(db.DateTime, nullable=False)
-    end_date = db.Column(db.DateTime)
-    all_day = db.Column(db.Boolean, default=False)
-    status = db.Column(db.String(20), default='Scheduled')
-    assigned_team_id = db.Column(db.Integer, db.ForeignKey('teams.id'))
-    assigned_fitter_id = db.Column(db.Integer, db.ForeignKey('fitters.id'))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    id = Column(Integer, primary_key=True)
+    job_id = Column(String(36), ForeignKey('jobs.id'), nullable=False)
+    title = Column(String(200), nullable=False)
+    description = Column(Text)
+    start_date = Column(DateTime, nullable=False)
+    end_date = Column(DateTime)
+    all_day = Column(Boolean, default=False)
+    status = Column(String(20), default='Scheduled')
+    assigned_team_id = Column(Integer, ForeignKey('teams.id'))
+    assigned_fitter_id = Column(Integer, ForeignKey('fitters.id'))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    job = db.relationship('Job', back_populates='schedule_items')
-    assigned_team = db.relationship('Team')
-    assigned_fitter = db.relationship('Fitter')
+    job = relationship('Job', back_populates='schedule_items')
+    assigned_team = relationship('Team')
+    assigned_fitter = relationship('Fitter')
 
 
-class Room(db.Model):
+class Room(Base):
     __tablename__ = 'rooms'
 
-    id = db.Column(db.Integer, primary_key=True)
-    job_id = db.Column(db.String(36), db.ForeignKey('jobs.id'), nullable=False)
-    name = db.Column(db.String(100), nullable=False)
-    room_type = db.Column(db.String(50), nullable=False)
-    measurements = db.Column(db.Text)  # could be JSON
-    notes = db.Column(db.Text)
-    order_index = db.Column(db.Integer, default=0)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    id = Column(Integer, primary_key=True)
+    job_id = Column(String(36), ForeignKey('jobs.id'), nullable=False)
+    name = Column(String(100), nullable=False)
+    room_type = Column(String(50), nullable=False)
+    measurements = Column(Text)  # could be JSON
+    notes = Column(Text)
+    order_index = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    job = db.relationship('Job', back_populates='rooms')
-    appliances = db.relationship('RoomAppliance', back_populates='room', lazy=True, cascade='all, delete-orphan')
+    job = relationship('Job', back_populates='rooms')
+    appliances = relationship('RoomAppliance', back_populates='room', lazy=True, cascade='all, delete-orphan')
 
 
-class RoomAppliance(db.Model):
+class RoomAppliance(Base):
     __tablename__ = 'room_appliances'
 
-    id = db.Column(db.Integer, primary_key=True)
-    room_id = db.Column(db.Integer, db.ForeignKey('rooms.id'), nullable=False)
-    appliance_type = db.Column(db.String(100), nullable=False)
-    brand = db.Column(db.String(100))
-    model = db.Column(db.String(100))
-    specifications = db.Column(db.Text)
-    installation_notes = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    id = Column(Integer, primary_key=True)
+    room_id = Column(Integer, ForeignKey('rooms.id'), nullable=False)
+    appliance_type = Column(String(100), nullable=False)
+    brand = Column(String(100))
+    model = Column(String(100))
+    specifications = Column(Text)
+    installation_notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    room = db.relationship('Room', back_populates='appliances')
+    room = relationship('Room', back_populates='appliances')
 
 
-class JobFormLink(db.Model):
+class JobFormLink(Base):
     __tablename__ = 'job_form_links'
 
-    id = db.Column(db.Integer, primary_key=True)
-    job_id = db.Column(db.String(36), db.ForeignKey('jobs.id'), nullable=False)
-    form_submission_id = db.Column(db.Integer, db.ForeignKey('form_submissions.id'), nullable=False)
-    linked_at = db.Column(db.DateTime, default=datetime.utcnow)
-    linked_by = db.Column(db.String(200))
+    id = Column(Integer, primary_key=True)
+    job_id = Column(String(36), ForeignKey('jobs.id'), nullable=False)
+    form_submission_id = Column(Integer, ForeignKey('form_submissions.id'), nullable=False)
+    linked_at = Column(DateTime, default=datetime.utcnow)
+    linked_by = Column(String(200))
 
-    job = db.relationship('Job', back_populates='form_links')
-    form_submission = db.relationship('FormSubmission', back_populates='job_links')
+    job = relationship('Job', back_populates='form_links')
+    form_submission = relationship('FormSubmission', back_populates='job_links')
 
 
-class JobNote(db.Model):
+class JobNote(Base):
     __tablename__ = 'job_notes'
 
-    id = db.Column(db.Integer, primary_key=True)
-    job_id = db.Column(db.String(36), db.ForeignKey('jobs.id'), nullable=False)
-    content = db.Column(db.Text, nullable=False)
-    note_type = db.Column(db.String(50), default='general')
-    author = db.Column(db.String(200))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    id = Column(Integer, primary_key=True)
+    job_id = Column(String(36), ForeignKey('jobs.id'), nullable=False)
+    content = Column(Text, nullable=False)
+    note_type = Column(String(50), default='general')
+    author = Column(String(200))
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    job = db.relationship('Job', back_populates='job_notes')
+    job = relationship('Job', back_populates='job_notes')
 
 
 # ----------------------------------
 # Quotation / Products Catalogue
 # ----------------------------------
 
-class ApplianceCategory(db.Model):
+class ApplianceCategory(Base):
     __tablename__ = 'appliance_categories'
 
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False, unique=True)
-    description = db.Column(db.Text)
-    active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False, unique=True)
+    description = Column(Text)
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    products = db.relationship('Product', back_populates='category', lazy=True)
+    products = relationship('Product', back_populates='category', lazy=True)
 
     def __repr__(self):
         return f'<ApplianceCategory {self.name}>'
 
 
-class Brand(db.Model):
+class Brand(Base):
     __tablename__ = 'brands'
 
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False, unique=True)
-    logo_url = db.Column(db.String(255))
-    website = db.Column(db.String(255))
-    active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False, unique=True)
+    logo_url = Column(String(255))
+    website = Column(String(255))
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    products = db.relationship('Product', back_populates='brand', lazy=True)
+    products = relationship('Product', back_populates='brand', lazy=True)
 
     def __repr__(self):
         return f'<Brand {self.name}>'
 
 
-class Product(db.Model):
+class Product(Base):
     __tablename__ = 'products'
 
-    id = db.Column(db.Integer, primary_key=True)
-    brand_id = db.Column(db.Integer, db.ForeignKey('brands.id'), nullable=False)
-    category_id = db.Column(db.Integer, db.ForeignKey('appliance_categories.id'), nullable=False)
+    id = Column(Integer, primary_key=True)
+    brand_id = Column(Integer, ForeignKey('brands.id'), nullable=False)
+    category_id = Column(Integer, ForeignKey('appliance_categories.id'), nullable=False)
 
-    model_code = db.Column(db.String(100), nullable=False, unique=True)
-    series = db.Column(db.String(100))
-    name = db.Column(db.String(200), nullable=False)
-    description = db.Column(db.Text)
+    model_code = Column(String(100), nullable=False, unique=True)
+    series = Column(String(100))
+    name = Column(String(200), nullable=False)
+    description = Column(Text)
 
-    base_price = db.Column(db.Numeric(10, 2))
-    low_tier_price = db.Column(db.Numeric(10, 2))
-    mid_tier_price = db.Column(db.Numeric(10, 2))
-    high_tier_price = db.Column(db.Numeric(10, 2))
+    base_price = Column(Numeric(10, 2))
+    low_tier_price = Column(Numeric(10, 2))
+    mid_tier_price = Column(Numeric(10, 2))
+    high_tier_price = Column(Numeric(10, 2))
 
-    dimensions = db.Column(db.Text)  # JSON string (W/H/D)
-    weight = db.Column(db.Numeric(8, 2))
-    color_options = db.Column(db.Text)  # JSON array
+    dimensions = Column(Text)  # JSON string (W/H/D)
+    weight = Column(Numeric(8, 2))
+    color_options = Column(Text)  # JSON array
 
-    pack_name = db.Column(db.String(200))
-    notes = db.Column(db.Text)
-    energy_rating = db.Column(db.String(10))
-    warranty_years = db.Column(db.Integer)
+    pack_name = Column(String(200))
+    notes = Column(Text)
+    energy_rating = Column(String(10))
+    warranty_years = Column(Integer)
 
-    active = db.Column(db.Boolean, default=True)
-    in_stock = db.Column(db.Boolean, default=True)
-    lead_time_weeks = db.Column(db.Integer)
+    active = Column(Boolean, default=True)
+    in_stock = Column(Boolean, default=True)
+    lead_time_weeks = Column(Integer)
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    brand = db.relationship('Brand', back_populates='products')
-    category = db.relationship('ApplianceCategory', back_populates='products')
-    quote_items = db.relationship('ProductQuoteItem', back_populates='product', lazy=True)
+    brand = relationship('Brand', back_populates='products')
+    category = relationship('ApplianceCategory', back_populates='products')
+    quote_items = relationship('ProductQuoteItem', back_populates='product', lazy=True)
 
     def __repr__(self):
         brand_name = self.brand.name if getattr(self, 'brand', None) else 'Unknown'
@@ -679,60 +677,60 @@ class Product(db.Model):
         return []
 
 
-class Quotation(db.Model):
+class Quotation(Base):
     __tablename__ = 'quotations'
 
-    id = db.Column(db.Integer, primary_key=True)
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=False)
-    reference_number = db.Column(db.String(50), unique=True)
-    total = db.Column(db.Numeric(10, 2), nullable=False)
-    status = db.Column(db.String(20), default='Draft')
-    valid_until = db.Column(db.Date)
-    notes = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(String(36), ForeignKey('customers.id'), nullable=False)
+    reference_number = Column(String(50), unique=True)
+    total = Column(Numeric(10, 2), nullable=False)
+    status = Column(String(20), default='Draft')
+    valid_until = Column(Date)
+    notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    customer = db.relationship('Customer', back_populates='quotations')
-    items = db.relationship('QuotationItem', back_populates='quotation', lazy=True, cascade='all, delete-orphan')
-    product_items = db.relationship('ProductQuoteItem', back_populates='quotation', lazy=True, cascade='all, delete-orphan')
-    job = db.relationship('Job', back_populates='quotation', uselist=False)
+    customer = relationship('Customer', back_populates='quotations')
+    items = relationship('QuotationItem', back_populates='quotation', lazy=True, cascade='all, delete-orphan')
+    product_items = relationship('ProductQuoteItem', back_populates='quotation', lazy=True, cascade='all, delete-orphan')
+    job = relationship('Job', back_populates='quotation', uselist=False)
 
 
-class QuotationItem(db.Model):
+class QuotationItem(Base):
     __tablename__ = 'quotation_items'
 
-    id = db.Column(db.Integer, primary_key=True)
-    quotation_id = db.Column(db.Integer, db.ForeignKey('quotations.id'), nullable=False)
-    item = db.Column(db.String(100), nullable=False)
-    description = db.Column(db.Text)
-    color = db.Column(db.String(50))
-    amount = db.Column(db.Float, nullable=False)
+    id = Column(Integer, primary_key=True)
+    quotation_id = Column(Integer, ForeignKey('quotations.id'), nullable=False)
+    item = Column(String(100), nullable=False)
+    description = Column(Text)
+    color = Column(String(50))
+    amount = Column(Float, nullable=False)
 
-    quotation = db.relationship('Quotation', back_populates='items')
+    quotation = relationship('Quotation', back_populates='items')
 
     def __repr__(self):
         return f'<QuotationItem {self.item} (Quotation {self.quotation_id})>'
 
 
-class ProductQuoteItem(db.Model):
+class ProductQuoteItem(Base):
     __tablename__ = 'product_quote_items'
 
-    id = db.Column(db.Integer, primary_key=True)
-    quotation_id = db.Column(db.Integer, db.ForeignKey('quotations.id'), nullable=False)
-    product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False)
+    id = Column(Integer, primary_key=True)
+    quotation_id = Column(Integer, ForeignKey('quotations.id'), nullable=False)
+    product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
 
-    quantity = db.Column(db.Integer, default=1)
-    quoted_price = db.Column(db.Numeric(10, 2), nullable=False)
-    tier_used = db.Column(db.String(10))
-    selected_color = db.Column(db.String(50))
-    custom_notes = db.Column(db.Text)
+    quantity = Column(Integer, default=1)
+    quoted_price = Column(Numeric(10, 2), nullable=False)
+    tier_used = Column(String(10))
+    selected_color = Column(String(50))
+    custom_notes = Column(Text)
 
-    line_total = db.Column(db.Numeric(10, 2))
+    line_total = Column(Numeric(10, 2))
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    quotation = db.relationship('Quotation', back_populates='product_items')
-    product = db.relationship('Product', back_populates='quote_items')
+    quotation = relationship('Quotation', back_populates='product_items')
+    product = relationship('Product', back_populates='quote_items')
 
     def __repr__(self):
         code = self.product.model_code if getattr(self, 'product', None) else 'Unknown'
@@ -747,21 +745,21 @@ class ProductQuoteItem(db.Model):
 # Invoicing & Payments
 # ----------------------------------
 
-class Invoice(db.Model):
+class Invoice(Base):
     __tablename__ = 'invoices'
 
-    id = db.Column(db.Integer, primary_key=True)
-    job_id = db.Column(db.String(36), db.ForeignKey('jobs.id'), nullable=False)
-    invoice_number = db.Column(db.String(50), unique=True, nullable=False)
-    status = db.Column(db.String(20), default='Draft')
-    due_date = db.Column(db.Date)
-    paid_date = db.Column(db.Date)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    id = Column(Integer, primary_key=True)
+    job_id = Column(String(36), ForeignKey('jobs.id'), nullable=False)
+    invoice_number = Column(String(50), unique=True, nullable=False)
+    status = Column(String(20), default='Draft')
+    due_date = Column(Date)
+    paid_date = Column(Date)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    job = db.relationship('Job', back_populates='invoices')
-    line_items = db.relationship('InvoiceLineItem', back_populates='invoice', lazy=True, cascade='all, delete-orphan')
-    payments = db.relationship('Payment', back_populates='invoice', lazy=True)
+    job = relationship('Job', back_populates='invoices')
+    line_items = relationship('InvoiceLineItem', back_populates='invoice', lazy=True, cascade='all, delete-orphan')
+    payments = relationship('Payment', back_populates='invoice', lazy=True)
 
     @property
     def amount_due(self):
@@ -777,233 +775,233 @@ class Invoice(db.Model):
         return (self.amount_due or 0) - (self.amount_paid or 0)
 
 
-class InvoiceLineItem(db.Model):
+class InvoiceLineItem(Base):
     __tablename__ = 'invoice_line_items'
 
-    id = db.Column(db.Integer, primary_key=True)
-    invoice_id = db.Column(db.Integer, db.ForeignKey('invoices.id'), nullable=False)
-    description = db.Column(db.String(255), nullable=False)
-    quantity = db.Column(db.Integer, default=1)
-    unit_price = db.Column(db.Numeric(10, 2), nullable=False)
-    vat_rate = db.Column(db.Numeric(5, 2), default=0)  # e.g. 20.00 for 20%
+    id = Column(Integer, primary_key=True)
+    invoice_id = Column(Integer, ForeignKey('invoices.id'), nullable=False)
+    description = Column(String(255), nullable=False)
+    quantity = Column(Integer, default=1)
+    unit_price = Column(Numeric(10, 2), nullable=False)
+    vat_rate = Column(Numeric(5, 2), default=0)  # e.g. 20.00 for 20%
 
-    invoice = db.relationship('Invoice', back_populates='line_items')
+    invoice = relationship('Invoice', back_populates='line_items')
 
 
-class Payment(db.Model):
+class Payment(Base):
     __tablename__ = 'payments'
 
-    id = db.Column(db.Integer, primary_key=True)
-    job_id = db.Column(db.String(36), db.ForeignKey('jobs.id'), nullable=False)
-    invoice_id = db.Column(db.Integer, db.ForeignKey('invoices.id'))  # optional link to invoice
+    id = Column(Integer, primary_key=True)
+    job_id = Column(String(36), ForeignKey('jobs.id'), nullable=False)
+    invoice_id = Column(Integer, ForeignKey('invoices.id'))  # optional link to invoice
 
-    date = db.Column(db.Date, default=datetime.utcnow)
-    amount = db.Column(db.Numeric(10, 2), nullable=False)
-    method = db.Column(PAYMENT_METHOD_ENUM, default='BACS')
-    reference = db.Column(db.String(120))
-    bank_details_used = db.Column(db.String(255))
-    notes = db.Column(db.Text)
+    date = Column(Date, default=datetime.utcnow)
+    amount = Column(Numeric(10, 2), nullable=False)
+    method = Column(PAYMENT_METHOD_ENUM, default='BACS')
+    reference = Column(String(120))
+    bank_details_used = Column(String(255))
+    notes = Column(Text)
 
-    cleared = db.Column(db.Boolean, default=True)
+    cleared = Column(Boolean, default=True)
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    job = db.relationship('Job', back_populates='payments')
-    invoice = db.relationship('Invoice', back_populates='payments')
+    job = relationship('Job', back_populates='payments')
+    invoice = relationship('Invoice', back_populates='payments')
 
 
 # ----------------------------------
 # Counting Sheets
 # ----------------------------------
 
-class CountingSheet(db.Model):
+class CountingSheet(Base):
     __tablename__ = 'counting_sheets'
 
-    id = db.Column(db.Integer, primary_key=True)
-    job_id = db.Column(db.String(36), db.ForeignKey('jobs.id'), nullable=False)
-    room_id = db.Column(db.Integer, db.ForeignKey('rooms.id'))  # optional, per-room counting
-    template_type = db.Column(db.Enum('KitchenCountingSheet', 'BedCountingSheet', name='counting_template_enum'), nullable=False)
-    status = db.Column(db.Enum('Draft', 'Finalised', name='counting_status_enum'), default='Draft')
+    id = Column(Integer, primary_key=True)
+    job_id = Column(String(36), ForeignKey('jobs.id'), nullable=False)
+    room_id = Column(Integer, ForeignKey('rooms.id'))  # optional, per-room counting
+    template_type = Column(Enum('KitchenCountingSheet', 'BedCountingSheet', name='counting_template_enum'), nullable=False)
+    status = Column(Enum('Draft', 'Finalised', name='counting_status_enum'), default='Draft')
 
-    created_by = db.Column(db.String(200))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_by = db.Column(db.String(200))
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_by = Column(String(200))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_by = Column(String(200))
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    job = db.relationship('Job', back_populates='counting_sheets')
-    room = db.relationship('Room')
-    items = db.relationship('CountingItem', back_populates='sheet', lazy=True, cascade='all, delete-orphan')
+    job = relationship('Job', back_populates='counting_sheets')
+    room = relationship('Room')
+    items = relationship('CountingItem', back_populates='sheet', lazy=True, cascade='all, delete-orphan')
 
 
-class CountingItem(db.Model):
+class CountingItem(Base):
     __tablename__ = 'counting_items'
 
-    id = db.Column(db.Integer, primary_key=True)
-    sheet_id = db.Column(db.Integer, db.ForeignKey('counting_sheets.id'), nullable=False)
+    id = Column(Integer, primary_key=True)
+    sheet_id = Column(Integer, ForeignKey('counting_sheets.id'), nullable=False)
 
-    description = db.Column(db.String(255), nullable=False)   # ITEM
-    quantity_requested = db.Column(db.Integer, default=0)     # ORDERED
-    quantity_ordered = db.Column(db.Integer, default=0)
-    quantity_counted = db.Column(db.Integer, default=0)       # COUNTED
-    unit = db.Column(db.String(50))
-    supplier = db.Column(db.String(120))
-    customer_supplied = db.Column(db.Boolean, default=False)
-    notes = db.Column(db.Text)
+    description = Column(String(255), nullable=False)   # ITEM
+    quantity_requested = Column(Integer, default=0)     # ORDERED
+    quantity_ordered = Column(Integer, default=0)
+    quantity_counted = Column(Integer, default=0)       # COUNTED
+    unit = Column(String(50))
+    supplier = Column(String(120))
+    customer_supplied = Column(Boolean, default=False)
+    notes = Column(Text)
 
-    sheet = db.relationship('CountingSheet', back_populates='items')
+    sheet = relationship('CountingSheet', back_populates='items')
 
 
 # ----------------------------------
 # Remedial Actions
 # ----------------------------------
 
-class RemedialAction(db.Model):
+class RemedialAction(Base):
     __tablename__ = 'remedial_actions'
 
-    id = db.Column(db.Integer, primary_key=True)
-    job_id = db.Column(db.String(36), db.ForeignKey('jobs.id'), nullable=False)
+    id = Column(Integer, primary_key=True)
+    job_id = Column(String(36), ForeignKey('jobs.id'), nullable=False)
 
-    date = db.Column(db.Date, default=datetime.utcnow)
-    assigned_to = db.Column(db.String(200))  # could be fitter/team/user
-    status = db.Column(db.Enum('Submitted', 'Reviewed', 'Actioned', name='remedial_status_enum'), default='Submitted')
-    notes = db.Column(db.Text)
+    date = Column(Date, default=datetime.utcnow)
+    assigned_to = Column(String(200))  # could be fitter/team/user
+    status = Column(Enum('Submitted', 'Reviewed', 'Actioned', name='remedial_status_enum'), default='Submitted')
+    notes = Column(Text)
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    job = db.relationship('Job', back_populates='remedials')
-    items = db.relationship('RemedialItem', back_populates='remedial', lazy=True, cascade='all, delete-orphan')
+    job = relationship('Job', back_populates='remedials')
+    items = relationship('RemedialItem', back_populates='remedial', lazy=True, cascade='all, delete-orphan')
 
 
-class RemedialItem(db.Model):
+class RemedialItem(Base):
     __tablename__ = 'remedial_items'
 
-    id = db.Column(db.Integer, primary_key=True)
-    remedial_id = db.Column(db.Integer, db.ForeignKey('remedial_actions.id'), nullable=False)
+    id = Column(Integer, primary_key=True)
+    remedial_id = Column(Integer, ForeignKey('remedial_actions.id'), nullable=False)
 
-    number = db.Column(db.Integer)  # No
-    item = db.Column(db.String(120))
-    remedial_action = db.Column(db.String(255))
-    colour = db.Column(db.String(50))
-    size = db.Column(db.String(50))
-    quantity = db.Column(db.Integer, default=1)
-    status = db.Column(db.String(50), default='Pending')
+    number = Column(Integer)  # No
+    item = Column(String(120))
+    remedial_action = Column(String(255))
+    colour = Column(String(50))
+    size = Column(String(50))
+    quantity = Column(Integer, default=1)
+    status = Column(String(50), default='Pending')
 
-    remedial = db.relationship('RemedialAction', back_populates='items')
+    remedial = relationship('RemedialAction', back_populates='items')
 
 
 # ----------------------------------
 # Templates Library
 # ----------------------------------
 
-class DocumentTemplate(db.Model):
+class DocumentTemplate(Base):
     __tablename__ = 'document_templates'
 
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(120), nullable=False)
-    template_type = db.Column(DOCUMENT_TEMPLATE_TYPE_ENUM, nullable=False)
-    file_path = db.Column(db.String(500), nullable=False)  # points to uploaded file
-    merge_fields = db.Column(db.JSON)  # list/structure of exposed merge fields
-    uploaded_by = db.Column(db.String(200))
-    uploaded_at = db.Column(db.DateTime, default=datetime.utcnow)
+    id = Column(Integer, primary_key=True)
+    name = Column(String(120), nullable=False)
+    template_type = Column(DOCUMENT_TEMPLATE_TYPE_ENUM, nullable=False)
+    file_path = Column(String(500), nullable=False)  # points to uploaded file
+    merge_fields = Column(JSON)  # list/structure of exposed merge fields
+    uploaded_by = Column(String(200))
+    uploaded_at = Column(DateTime, default=datetime.utcnow)
 
 
 # ----------------------------------
 # Audit & Versioning
 # ----------------------------------
 
-class AuditLog(db.Model):
+class AuditLog(Base):
     __tablename__ = 'audit_logs'
 
-    id = db.Column(db.Integer, primary_key=True)
-    entity_type = db.Column(db.String(120), nullable=False)
-    entity_id = db.Column(db.String(120), nullable=False)
-    action = db.Column(AUDIT_ACTION_ENUM, nullable=False)
-    changed_by = db.Column(db.String(200))
-    changed_at = db.Column(db.DateTime, default=datetime.utcnow)
-    change_summary = db.Column(db.JSON)  # JSON diff summary
-    previous_snapshot = db.Column(db.JSON)
-    new_snapshot = db.Column(db.JSON)
+    id = Column(Integer, primary_key=True)
+    entity_type = Column(String(120), nullable=False)
+    entity_id = Column(String(120), nullable=False)
+    action = Column(AUDIT_ACTION_ENUM, nullable=False)
+    changed_by = Column(String(200))
+    changed_at = Column(DateTime, default=datetime.utcnow)
+    change_summary = Column(JSON)  # JSON diff summary
+    previous_snapshot = Column(JSON)
+    new_snapshot = Column(JSON)
 
 
-class VersionedSnapshot(db.Model):
+class VersionedSnapshot(Base):
     __tablename__ = 'versioned_snapshots'
 
-    id = db.Column(db.Integer, primary_key=True)
-    entity_type = db.Column(db.String(120), nullable=False)
-    entity_id = db.Column(db.String(120), nullable=False)
-    version_number = db.Column(db.Integer, nullable=False)
-    reason = db.Column(db.String(255))
-    snapshot = db.Column(db.JSON, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    created_by = db.Column(db.String(200))
+    id = Column(Integer, primary_key=True)
+    entity_type = Column(String(120), nullable=False)
+    entity_id = Column(String(120), nullable=False)
+    version_number = Column(Integer, nullable=False)
+    reason = Column(String(255))
+    snapshot = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    created_by = Column(String(200))
 
 
 # ----------------------------------
 # Notifications
 # ----------------------------------
 
-class ProductionNotification(db.Model):
+class ProductionNotification(Base):
     __tablename__ = 'production_notifications'
     
-    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    job_id = db.Column(db.String(36), db.ForeignKey('jobs.id'), nullable=True)
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=True)
-    message = db.Column(db.Text, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    read = db.Column(db.Boolean, default=False)
-    moved_by = db.Column(db.String(255), nullable=True)
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    job_id = Column(String(36), ForeignKey('jobs.id'), nullable=True)
+    customer_id = Column(String(36), ForeignKey('customers.id'), nullable=True)
+    message = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    read = Column(Boolean, default=False)
+    moved_by = Column(String(255), nullable=True)
     
-    # Relationships
-    job = db.relationship('Job', backref='notifications')
-    customer = db.relationship('Customer', backref='notifications')
+    # relationships
+    job = relationship('Job', backref='notifications')
+    customer = relationship('Customer', backref='notifications')
 
 
 # ----------------------------------
 # Forms / Submissions / Imports
 # ----------------------------------
 
-class FormSubmission(db.Model):
+class FormSubmission(Base):
     __tablename__ = 'form_submissions'
 
-    id = db.Column(db.Integer, primary_key=True)
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'))
-    form_data = db.Column(db.Text, nullable=False)
-    source = db.Column(db.String(100))
-    submitted_at = db.Column(db.DateTime, default=datetime.utcnow)
-    processed = db.Column(db.Boolean, default=False)
-    processed_at = db.Column(db.DateTime)
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(String(36), ForeignKey('customers.id'))
+    form_data = Column(Text, nullable=False)
+    source = Column(String(100))
+    submitted_at = Column(DateTime, default=datetime.utcnow)
+    processed = Column(Boolean, default=False)
+    processed_at = Column(DateTime)
 
-    customer = db.relationship('Customer', back_populates='form_submissions')
-    job_links = db.relationship('JobFormLink', back_populates='form_submission', lazy=True, cascade='all, delete-orphan')
+    customer = relationship('Customer', back_populates='form_submissions')
+    job_links = relationship('JobFormLink', back_populates='form_submission', lazy=True, cascade='all, delete-orphan')
 
 
 # UPDATED: CustomerFormData now requires project_id
-class CustomerFormData(db.Model):
+class CustomerFormData(Base):
     __tablename__ = 'customer_form_data'
 
-    id = db.Column(db.Integer, primary_key=True)
+    id = Column(Integer, primary_key=True)
     
     # FOREIGN KEYS: Links to both Customer and Project
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'), nullable=False)
-    project_id = db.Column(db.String(36), db.ForeignKey('projects.id'), nullable=False)  # NEW: Required field
+    customer_id = Column(String(36), ForeignKey('customers.id'), nullable=False)
+    project_id = Column(String(36), ForeignKey('projects.id'), nullable=False)  # NEW: Required field
     
-    form_data = db.Column(db.Text, nullable=False)
-    token_used = db.Column(db.String(64), nullable=True)
-    submitted_at = db.Column(db.DateTime, default=datetime.utcnow)
+    form_data = Column(Text, nullable=False)
+    token_used = Column(String(64), nullable=True)
+    submitted_at = Column(DateTime, default=datetime.utcnow)
 
     # Approval fields
-    approval_status = db.Column(db.String(20), default='pending')
-    approved_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
-    approval_date = db.Column(db.DateTime, nullable=True)
-    rejection_reason = db.Column(db.Text, nullable=True)
-    created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    approval_status = Column(String(20), default='pending')
+    approved_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    approval_date = Column(DateTime, nullable=True)
+    rejection_reason = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey('users.id'), nullable=True)
 
-    # RELATIONSHIPS
-    customer = db.relationship('Customer', back_populates='form_data')
-    project = db.relationship('Project', back_populates='form_submissions')
+    # relationshipS
+    customer = relationship('Customer', back_populates='form_data')
+    project = relationship('Project', back_populates='form_submissions')
     
     # Notifications relationship with cascade delete
-    notifications = db.relationship(
+    notifications = relationship(
         'ApprovalNotification',
         backref='document',
         cascade='all, delete-orphan',
@@ -1034,72 +1032,72 @@ class CustomerFormData(db.Model):
         }
 
 
-class ApprovalNotification(db.Model):
+class ApprovalNotification(Base):
     __tablename__ = 'approval_notifications'
     
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    document_type = db.Column(db.String(50), nullable=False)
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    document_type = Column(String(50), nullable=False)
     
     # Foreign key with cascade delete
-    document_id = db.Column(
-        db.Integer, 
-        db.ForeignKey('customer_form_data.id', ondelete='CASCADE'),
+    document_id = Column(
+        Integer, 
+        ForeignKey('customer_form_data.id', ondelete='CASCADE'),
         nullable=False
     )
     
-    status = db.Column(db.String(20), default='pending')
-    message = db.Column(db.Text, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    is_read = db.Column(db.Boolean, default=False)
+    status = Column(String(20), default='pending')
+    message = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    is_read = Column(Boolean, default=False)
     
-    # Relationships
-    user = db.relationship('User', backref='notifications')
+    # relationships
+    user = relationship('User', backref='notifications')
     
     def __repr__(self):
         return f'<ApprovalNotification {self.id} for User {self.user_id}>'
 
 
-class DataImport(db.Model):
+class DataImport(Base):
     __tablename__ = 'data_imports'
 
-    id = db.Column(db.Integer, primary_key=True)
-    filename = db.Column(db.String(255), nullable=False)
-    import_type = db.Column(db.String(50), nullable=False)  # 'appliance_matrix', 'kbb_pricelist'
-    status = db.Column(db.String(20), default='processing')  # processing, completed, failed
-    records_processed = db.Column(db.Integer, default=0)
-    records_failed = db.Column(db.Integer, default=0)
-    error_log = db.Column(db.Text)
-    imported_by = db.Column(db.String(200))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    completed_at = db.Column(db.DateTime)
+    id = Column(Integer, primary_key=True)
+    filename = Column(String(255), nullable=False)
+    import_type = Column(String(50), nullable=False)  # 'appliance_matrix', 'kbb_pricelist'
+    status = Column(String(20), default='processing')  # processing, completed, failed
+    records_processed = Column(Integer, default=0)
+    records_failed = Column(Integer, default=0)
+    error_log = Column(Text)
+    imported_by = Column(String(200))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime)
 
     def __repr__(self):
         return f'<DataImport {self.filename} ({self.status})>'
 
-class DrawingDocument(db.Model):
+class DrawingDocument(Base):
     __tablename__ = 'drawing_documents'
 
-    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     
     # FOREIGN KEYS: Links to Customer and Project
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id', ondelete='CASCADE'), nullable=False) # ADDED ondelete='CASCADE'
-    project_id = db.Column(db.String(36), db.ForeignKey('projects.id', ondelete='CASCADE'), nullable=True) # ADDED ondelete='CASCADE'
+    customer_id = Column(String(36), ForeignKey('customers.id', ondelete='CASCADE'), nullable=False) # ADDED ondelete='CASCADE'
+    project_id = Column(String(36), ForeignKey('projects.id', ondelete='CASCADE'), nullable=True) # ADDED ondelete='CASCADE'
     
     # File details
-    file_name = db.Column(db.String(255), nullable=False)
-    storage_path = db.Column(db.String(500), nullable=False) # Path on disk or S3/Cloud Storage key
-    file_url = db.Column(db.String(500), nullable=False)     # URL to download/view the file
-    mime_type = db.Column(db.String(100))
-    category = db.Column(db.String(50), default='Drawing')   # e.g., 'Drawing', 'Layout', 'Photo'
+    file_name = Column(String(255), nullable=False)
+    storage_path = Column(String(500), nullable=False) # Path on disk or S3/Cloud Storage key
+    file_url = Column(String(500), nullable=False)     # URL to download/view the file
+    mime_type = Column(String(100))
+    category = Column(String(50), default='Drawing')   # e.g., 'Drawing', 'Layout', 'Photo'
     
     # Audit
-    uploaded_by = db.Column(db.String(200))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    uploaded_by = Column(String(200))
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    # RELATIONSHIPS (passive_deletes=True can also help, but ondelete='CASCADE' is stronger)
-    customer = db.relationship('Customer', backref='drawing_documents')
-    project = db.relationship('Project', backref='drawing_documents')
+    # relationshipS (passive_deletes=True can also help, but ondelete='CASCADE' is stronger)
+    customer = relationship('Customer', backref='drawing_documents')
+    project = relationship('Project', backref='drawing_documents')
     
     def to_dict(self):
         return {
@@ -1114,49 +1112,49 @@ class DrawingDocument(db.Model):
         }
 
 
-class Assignment(db.Model):
+class Assignment(Base):
     __tablename__ = 'assignments'
 
-    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     
     # Basic assignment info
-    type = db.Column(ASSIGNMENT_TYPE_ENUM, nullable=False, default='job')
-    title = db.Column(db.String(255), nullable=False)
-    date = db.Column(db.Date, nullable=False)
+    type = Column(ASSIGNMENT_TYPE_ENUM, nullable=False, default='job')
+    title = Column(String(255), nullable=False)
+    date = Column(Date, nullable=False)
     
     # Staff assignment - BOTH user_id (FK) and team_member (string for display)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'))  # FK to User table
-    team_member = db.Column(db.String(200))  # Denormalized name for quick display
+    user_id = Column(Integer, ForeignKey('users.id'))  # FK to User table
+    team_member = Column(String(200))  # Denormalized name for quick display
     
-    calendar_event_id = db.Column(db.String(255), nullable=True)
+    calendar_event_id = Column(String(255), nullable=True)
     
     # Who created/assigned this
-    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_by = Column(Integer, ForeignKey('users.id'))
     
     # Job-related fields
-    job_id = db.Column(db.String(36), db.ForeignKey('jobs.id'))
-    customer_id = db.Column(db.String(36), db.ForeignKey('customers.id'))
+    job_id = Column(String(36), ForeignKey('jobs.id'))
+    customer_id = Column(String(36), ForeignKey('customers.id'))
     
     # Time fields
-    start_time = db.Column(db.Time)
-    end_time = db.Column(db.Time)
-    estimated_hours = db.Column(db.Float)
+    start_time = Column(Time)
+    end_time = Column(Time)
+    estimated_hours = Column(Float)
     
     # Additional info
-    notes = db.Column(db.Text)
-    priority = db.Column(db.String(20), default='Medium')
-    status = db.Column(db.String(20), default='Scheduled')
+    notes = Column(Text)
+    priority = Column(String(20), default='Medium')
+    status = Column(String(20), default='Scheduled')
     
     # Audit fields
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_by = db.Column(db.Integer)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_by = Column(Integer)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # Relationships
-    job = db.relationship('Job', backref='assignments')
-    customer = db.relationship('Customer', backref='assignments')
-    assigned_user = db.relationship('User', foreign_keys=[user_id], backref='assignments')
-    creator = db.relationship('User', foreign_keys=[created_by], backref='created_assignments')
+    # relationships
+    job = relationship('Job', backref='assignments')
+    customer = relationship('Customer', backref='assignments')
+    assigned_user = relationship('User', foreign_keys=[user_id], backref='assignments')
+    creator = relationship('User', foreign_keys=[created_by], backref='created_assignments')
     
     def __repr__(self):
         return f'<Assignment {self.id}: {self.title} on {self.date}>'

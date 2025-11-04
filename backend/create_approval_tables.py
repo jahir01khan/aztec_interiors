@@ -1,6 +1,7 @@
 # create_approval_table.py
 from backend.app import create_app
-from backend.database import db
+from backend.db import SessionLocal, Base, engine
+
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey
 from sqlalchemy.sql import func

@@ -1,17 +1,68 @@
 # db.py
-import sqlite3
 import os
 from dotenv import load_dotenv
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.exc import SQLAlchemyError
 
 load_dotenv()
 
-def get_db_connection():
-    """Create and return a SQLite database connection for raw queries"""
+# Load DATABASE_URL from environment variable
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Fallback to local SQLite database if DATABASE_URL not set
+if not DATABASE_URL:
+    DATABASE_URL = "sqlite:///./local.db"
+    print("⚠️ Using local SQLite database (DATABASE_URL not found in environment).")
+else:
+    print("✅ Using hosted PostgreSQL database.")
+
+# Create SQLAlchemy engine
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    future=True
+)
+
+# Create a configured "Session" class
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine,
+    future=True
+)
+
+# Base class for declarative models
+Base = declarative_base()
+
+
+def get_db():
+    """Dependency-style session generator"""
+    db = SessionLocal()
     try:
-        db_path = os.getenv('DATABASE_PATH', 'database.db')
-        connection = sqlite3.connect(db_path)
-        connection.row_factory = sqlite3.Row  # Access columns by name like dictionary
-        return connection
-    except sqlite3.Error as err:
-        print(f"Database connection error: {err}")
+        yield db
+    finally:
+        db.close()
+
+
+def test_connection():
+    """Optional: Check DB connection for diagnostics"""
+    try:
+        with engine.connect() as conn:
+            print("✅ Database connection successful.")
+    except SQLAlchemyError as e:
+        print("❌ Database connection failed:", e)
+
+
+# 👇 Legacy compatibility function for routes still using get_db_connection()
+def get_db_connection():
+    """
+    Legacy wrapper for backward compatibility with old code expecting
+    a raw connection (like SQLite). Now returns an SQLAlchemy connection.
+    """
+    try:
+        conn = engine.connect()
+        return conn
+    except SQLAlchemyError as e:
+        print(f"❌ Error creating database connection: {e}")
         raise

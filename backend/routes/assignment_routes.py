@@ -60,8 +60,18 @@ def handle_assignments():
                 status=data.get('status', 'Scheduled')
             )
             
-            db.session.add(assignment)
-            db.session.commit()
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(assignment)
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
             
             # --- NEW GOOGLE SYNC LOGIC (CREATE) ---
             should_sync = False
@@ -72,7 +82,12 @@ def handle_assignments():
                 try:
                     event_id = create_calendar_event(assignment)
                     assignment.calendar_event_id = event_id
-                    db.session.commit()
+                    session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
                 except Exception as cal_err:
                     print(f"Google Calendar event creation failed: {cal_err}")
 
@@ -82,7 +97,12 @@ def handle_assignments():
             }), 201
 
         except Exception as e:
-            db.session.rollback()
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
             return jsonify({'error': str(e)}), 400
     
     # -------------------- GET --------------------
@@ -165,7 +185,12 @@ def handle_single_assignment(assignment_id):
             assignment.updated_by_name = current_user.get_full_name() # <-- ADDED (Task 2)
             assignment.updated_at = datetime.utcnow()
             
-            db.session.commit()
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
 
             # --- NEW GOOGLE SYNC LOGIC (UPDATE) ---
             should_sync = False
@@ -184,7 +209,12 @@ def handle_single_assignment(assignment_id):
             })
             
         except Exception as e:
-            db.session.rollback()
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
             return jsonify({'error': str(e)}), 400
     
     # -------------------- DELETE --------------------
@@ -204,12 +234,27 @@ def handle_single_assignment(assignment_id):
                 except Exception as cal_err:
                     print(f"Google Calendar event deletion failed: {cal_err}")
             
-            db.session.delete(assignment)
-            db.session.commit()
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.delete(assignment)
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
             return jsonify({'message': 'Assignment deleted successfully'})
         
         except Exception as e:
-            db.session.rollback()
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
             return jsonify({'error': str(e)}), 400
 
 

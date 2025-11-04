@@ -49,10 +49,20 @@ def mark_as_read(notification_id):
 
     try:
         notification.read = True
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         return jsonify({'message': 'Notification marked as read'}), 200
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         return jsonify({'error': str(e)}), 500
 
 @notification_bp.route('/notifications/production/mark-all-read', methods=['PATCH', 'OPTIONS'])
@@ -68,8 +78,18 @@ def mark_all_as_read():
     try:
         # Update all unread notifications in one query
         ProductionNotification.query.filter_by(read=False).update({'read': True})
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         return jsonify({'message': 'All notifications marked as read'}), 200
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         return jsonify({'error': str(e)}), 500

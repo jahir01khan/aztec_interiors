@@ -83,14 +83,29 @@ def delete_customer_drawing(drawing_id):
                 current_app.logger.warning(f"Could not delete file {drawing.storage_path}: {e}")
 
         # 2. Delete DB record
-        db.session.delete(drawing)
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.delete(drawing)
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
 
         return jsonify({'success': True, 'message': 'Drawing deleted successfully'}), 200
 
     except Exception as e:
         # Rollback the session on error
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         current_app.logger.error(f"Error deleting drawing {drawing_id}: {e}", exc_info=True)
         # 💡 DEBUG FIX: Return the detailed exception message to the client
         return jsonify({'error': f'Failed to delete. Server error: {str(e)}'}), 500
@@ -348,8 +363,18 @@ def handle_customer_drawings():
                 uploaded_by=request.current_user.get_full_name() if hasattr(request, 'current_user') else 'System'
             )
 
-            db.session.add(new_drawing)
-            db.session.commit()
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(new_drawing)
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
 
             current_app.logger.info(f"Drawing saved for customer {customer_id}: {filename} at {file_path}")
 
@@ -367,7 +392,12 @@ def handle_customer_drawings():
             }), 201
 
         except Exception as e:
-            db.session.rollback()
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
             current_app.logger.error(f"Error processing drawing upload: {str(e)}", exc_info=True)
             # Try to remove partially uploaded file if save failed before commit
             if 'file_path' in locals() and os.path.exists(file_path):

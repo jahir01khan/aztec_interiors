@@ -70,7 +70,12 @@ def log_login_attempt(email, ip_address, success):
             ip_address=ip_address,
             success=success
         )
-        db.session.add(attempt)
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(attempt)
     except Exception as e:
         print(f"Warning: Could not log login attempt: {e}")
 
@@ -245,12 +250,22 @@ def register():
         if not DEV_MODE:
             user.generate_verification_token()
 
-        db.session.add(user)
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(user)
         
         # Log attempt
         log_login_attempt(email, get_client_ip(), True)
         
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
 
         print(f"✅ User registered: {email} as {role}")
 
@@ -261,7 +276,12 @@ def register():
         }), 201
 
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         print(f"❌ Registration error: {e}")
         return jsonify({'error': str(e)}), 500
 
@@ -273,7 +293,9 @@ def login():
             return jsonify({'error': 'Email and password required'}), 400
 
         email = data['email'].lower().strip()
-        user = User.query.filter_by(email=email).first()
+        session = SessionLocal()
+user = session.query(User).filter_by(email=email).first()
+session.close()
         ip = get_client_ip()
 
         if not check_rate_limit(email):
@@ -281,7 +303,12 @@ def login():
 
         if not user or not user.check_password(data['password']):
             log_login_attempt(email, ip, False)
-            db.session.commit()
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
             print(f"❌ Login failed for: {email}")
             return jsonify({'error': 'Invalid email or password'}), 401
 
@@ -306,9 +333,19 @@ def login():
             user_agent=request.headers.get('User-Agent', '')[:255],
             expires_at=datetime.utcnow() + timedelta(days=7)
         )
-        db.session.add(session)
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(session)
         log_login_attempt(email, ip, True)
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
 
         print(f"✅ Login successful: {email}")
 
@@ -319,7 +356,12 @@ def login():
             'user': user.to_dict()
         }), 200
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         print(f"❌ Login error: {e}")
         return jsonify({'error': str(e)}), 500
 
@@ -334,8 +376,18 @@ def logout():
         token = request.headers.get('Authorization').split(" ")[1]
         session = Session.query.filter_by(session_token=token).first()
         if session:
-            db.session.delete(session)
-            db.session.commit()
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.delete(session)
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         return jsonify({'message': 'Logged out successfully'}), 200
         
@@ -396,7 +448,12 @@ def refresh_token():
         if session:
             session.session_token = new_token
             session.expires_at = datetime.utcnow() + timedelta(days=7)
-            db.session.commit()
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         return jsonify({
             'token': new_token,
@@ -404,7 +461,12 @@ def refresh_token():
         }), 200
         
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         return jsonify({'error': str(e)}), 500
 
 @auth_bp.route('/auth/forgot-password', methods=['POST'])
@@ -417,11 +479,18 @@ def forgot_password():
             return jsonify({'error': 'Email is required'}), 400
         
         email = data['email'].lower().strip()
-        user = User.query.filter_by(email=email).first()
+        session = SessionLocal()
+user = session.query(User).filter_by(email=email).first()
+session.close()
         
         if user:
             reset_token = user.generate_reset_token()
-            db.session.commit()
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
             print(f"Password reset token for {email}: {reset_token}")
         
         return jsonify({
@@ -429,7 +498,12 @@ def forgot_password():
         }), 200
         
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         return jsonify({'error': str(e)}), 500
 
 @auth_bp.route('/auth/reset-password', methods=['POST'])
@@ -462,12 +536,22 @@ def reset_password():
         user.reset_token = None
         user.reset_token_expires = None
         
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         return jsonify({'message': 'Password reset successful'}), 200
         
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         return jsonify({'error': str(e)}), 500
 
 @auth_bp.route('/auth/change-password', methods=['POST'])
@@ -496,12 +580,22 @@ def change_password():
         user.set_password(new_password)
         user.updated_at = datetime.utcnow()
         
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         return jsonify({'message': 'Password changed successfully'}), 200
         
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         return jsonify({'error': str(e)}), 500
 
 @auth_bp.route('/auth/users', methods=['GET'])
@@ -524,7 +618,12 @@ def toggle_user_status(user_id):
         user = User.query.get_or_404(user_id)
         user.is_active = not user.is_active
         user.updated_at = datetime.utcnow()
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         return jsonify({
             'message': f'User {"activated" if user.is_active else "deactivated"} successfully',
@@ -532,5 +631,10 @@ def toggle_user_status(user_id):
         }), 200
         
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         return jsonify({'error': str(e)}), 500

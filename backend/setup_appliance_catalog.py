@@ -1,6 +1,6 @@
 # setup_appliance_catalog.py - Setup script for appliance catalog
 from app import app
-from backend.database import db
+from backend.db import SessionLocal, Base, engine
 from backend.models import Brand, ApplianceCategory, Product
 import json
 
@@ -10,7 +10,8 @@ def setup_appliance_catalog():
         print("Setting up Appliance Catalog...")
         
         # Create tables
-        db.create_all()
+        Base.metadata.create_all(bind=engine)
+
         
         # Create sample brands
         brands_data = [
@@ -33,7 +34,12 @@ def setup_appliance_catalog():
                     website=brand_data["website"],
                     active=True
                 )
-                db.session.add(brand)
+                session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(brand)
         
         # Create sample categories
         categories_data = [
@@ -56,9 +62,19 @@ def setup_appliance_catalog():
                     description=category_data["description"],
                     active=True
                 )
-                db.session.add(category)
+                session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(category)
         
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         # Get created brands and categories for sample products
         bosch = Brand.query.filter_by(name="Bosch").first()
@@ -152,9 +168,19 @@ def setup_appliance_catalog():
         for product_data in sample_products:
             if not Product.query.filter_by(model_code=product_data["model_code"]).first():
                 product = Product(**product_data)
-                db.session.add(product)
+                session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(product)
         
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         print("✅ Appliance Catalog setup completed!")
         print(f"Created {Brand.query.count()} brands")

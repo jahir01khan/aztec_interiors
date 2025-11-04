@@ -99,8 +99,18 @@ def create_customer():
             created_by=request.current_user.id
         )
         
-        db.session.add(new_customer)
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(new_customer)
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         current_app.logger.info(f"Customer {new_customer.id} created by user {request.current_user.id}")
         
@@ -111,7 +121,12 @@ def create_customer():
         }), 201
         
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         current_app.logger.exception(f"Error creating customer: {e}")
         return jsonify({'error': f'Failed to create customer: {str(e)}'}), 500
 
@@ -186,7 +201,12 @@ def update_customer(customer_id):
         customer.updated_by = request.current_user.id
         customer.updated_at = datetime.utcnow()
         
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         return jsonify({
             'success': True,
@@ -195,7 +215,12 @@ def update_customer(customer_id):
         }), 200
         
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         current_app.logger.exception(f"Error updating customer {customer_id}: {e}")
         return jsonify({'error': f'Failed to update customer: {str(e)}'}), 500
 
@@ -220,8 +245,18 @@ def delete_customer(customer_id):
                 'error': f'Cannot delete customer with {len(customer.projects)} project(s). Delete projects first.'
             }), 400
         
-        db.session.delete(customer)
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.delete(customer)
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         current_app.logger.info(f"Customer {customer_id} deleted by user {request.current_user.id}")
         
@@ -231,7 +266,12 @@ def delete_customer(customer_id):
         }), 200
         
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         current_app.logger.exception(f"Error deleting customer {customer_id}: {e}")
         return jsonify({'error': 'Failed to delete customer'}), 500
 
@@ -304,7 +344,12 @@ def create_project(customer_id):
             created_by=request.current_user.id
         )
         
-        db.session.add(new_project)
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(new_project)
         
         # --- CRITICAL FIX 1: SIMPLIFY STAGE SYNC ON CREATION ---
         
@@ -319,7 +364,12 @@ def create_project(customer_id):
             
         # --- END CRITICAL FIX 1 ---
         
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         current_app.logger.info(f"Project {new_project.id} created for customer {customer_id} by user {request.current_user.id}")
         
@@ -330,7 +380,12 @@ def create_project(customer_id):
         }), 201
         
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         current_app.logger.exception(f"Error creating project for customer {customer_id}: {e}")
         return jsonify({'error': f'Failed to create project: {str(e)}'}), 500
 
@@ -411,7 +466,12 @@ def update_project(project_id):
             
         # --- END CRITICAL FIX 2 ---
         
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         current_app.logger.info(f"Project {project_id} updated by user {request.current_user.id}")
         
@@ -422,7 +482,12 @@ def update_project(project_id):
         }), 200
         
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         current_app.logger.exception(f"Error updating project {project_id}: {e}")
         return jsonify({'error': f'Failed to update project: {str(e)}'}), 500
 
@@ -441,8 +506,18 @@ def delete_project(project_id):
         
         project = Project.query.get_or_404(project_id)
         
-        db.session.delete(project)
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.delete(project)
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         current_app.logger.info(f"Project {project_id} deleted by user {request.current_user.id}")
         
@@ -452,7 +527,12 @@ def delete_project(project_id):
         }), 200
         
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         current_app.logger.exception(f"Error deleting project {project_id}: {e}")
         return jsonify({'error': 'Failed to delete project'}), 500
 
@@ -533,8 +613,18 @@ def delete_drawing_document(drawing_id):
         
         # NOTE: In a real app, you must **delete the actual file** from S3/disk here
         
-        db.session.delete(drawing)
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.delete(drawing)
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         current_app.logger.info(f"Drawing document {drawing_id} deleted by user {request.current_user.id}")
         
@@ -544,7 +634,12 @@ def delete_drawing_document(drawing_id):
         }), 200
         
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         current_app.logger.exception(f"Error deleting drawing document {drawing_id}: {e}")
         return jsonify({'error': 'Failed to delete drawing document'}), 500
 
@@ -593,8 +688,18 @@ def submit_form():
             submitted_at=datetime.utcnow()
         )
         
-        db.session.add(form_submission)
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(form_submission)
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         current_app.logger.info(f"Form submitted for project {project_id}")
         
@@ -605,6 +710,11 @@ def submit_form():
         }), 201
         
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         current_app.logger.exception(f"Error submitting form: {e}")
         return jsonify({'error': f'Failed to submit form: {str(e)}'}), 500

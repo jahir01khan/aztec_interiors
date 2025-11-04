@@ -86,7 +86,12 @@ def handle_single_customer(customer_id):
             if "no such column: customer_form_data.project_id" in str(e):
                 current_app.logger.warning(f"Fallback query due to missing project_id column in database schema.")
                 # Fallback to selecting only fields present in the old schema
-                form_entries = db.session.query(
+                form_entries = session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.query(
                     CustomerFormData.id, 
                     CustomerFormData.form_data, 
                     CustomerFormData.token_used,
@@ -194,12 +199,27 @@ def handle_single_customer(customer_id):
         if 'address' in data:
             customer.postcode = customer.extract_postcode_from_address()
         
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         return jsonify({'message': 'Customer updated successfully'})
     
     elif request.method == 'DELETE':
-        db.session.delete(customer)
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.delete(customer)
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         return jsonify({'message': 'Customer deleted successfully'})
 
 @db_bp.route('/customers/<string:customer_id>/sync-stage', methods=['POST'])
@@ -264,8 +284,18 @@ def handle_quotations():
                 status='Approved' if auto_approve else 'Draft'
             )
             
-            db.session.add(quotation)
-            db.session.flush()  # Get the quotation.id
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(quotation)
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.flush()  # Get the quotation.id
             
             current_app.logger.info(f"[QUOTATION POST] Created quotation ID: {quotation.id}")
             
@@ -279,13 +309,23 @@ def handle_quotations():
                     color=item_data.get('color', ''),
                     amount=float(item_data.get('amount', 0))
                 )
-                db.session.add(q_item)
+                session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(q_item)
                 items_created += 1
             
             current_app.logger.info(f"[QUOTATION POST] Created {items_created} items")
             
             # Commit everything
-            db.session.commit()
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
             
             current_app.logger.info(f"[QUOTATION POST] Successfully saved quotation {quotation.id} for customer {customer_id}")
             
@@ -300,11 +340,21 @@ def handle_quotations():
             }), 201
             
         except KeyError as e:
-            db.session.rollback()
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
             current_app.logger.error(f"[QUOTATION POST ERROR] Missing key: {e}")
             return jsonify({'error': f'Missing required field: {str(e)}'}), 400
         except Exception as e:
-            db.session.rollback()
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
             current_app.logger.exception(f"[QUOTATION POST ERROR] {str(e)}")
             return jsonify({'error': str(e)}), 500
     
@@ -406,8 +456,18 @@ def handle_jobs():
         if data.get('deposit_due_date'):
             job.deposit_due_date = datetime.strptime(data['deposit_due_date'], '%Y-%m-%d')
         
-        db.session.add(job)
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(job)
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         # Update customer stage to match job stage if this is their first/primary job
         customer = Customer.query.get(job.customer_id)
@@ -514,7 +574,12 @@ def handle_single_job(job_id):
         if 'deposit_due_date' in data and data['deposit_due_date']:
             job.deposit_due_date = datetime.strptime(data['deposit_due_date'], '%Y-%m-%d')
         
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         # Update customer stage if this job's stage changed
         if 'stage' in data:
@@ -525,8 +590,18 @@ def handle_single_job(job_id):
         return jsonify({'message': 'Job updated successfully'})
     
     elif request.method == 'DELETE':
-        db.session.delete(job)
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.delete(job)
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         # Update customer stage after job deletion
         customer = Customer.query.get(job.customer_id)
@@ -780,11 +855,21 @@ def update_customer_stage(customer_id):
                 message=f"customer '{customer.name or customer.id}' moved to Accepted",
                 moved_by=updated_by_user 
             )
-            db.session.add(notification_to_add) # Add notification to the session
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(notification_to_add) # Add notification to the session
         # --- End Notification Logic ---
 
         # CRITICAL: Commit the changes to the database
-        db.session.commit()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit()
         
         return jsonify({
             'message': 'Stage updated successfully',
@@ -794,7 +879,12 @@ def update_customer_stage(customer_id):
         }), 200
         
     except Exception as e:
-        db.session.rollback()
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback()
         # current_app.logger.error(f"Error updating customer stage for {customer_id}: {e}") # Log error
         return jsonify({'error': str(e)}), 500
 
@@ -854,7 +944,12 @@ def update_job_stage(job_id):
                 message=f"Job '{job.job_name or job.job_reference or job.id}' moved to Accepted",
                 moved_by=updated_by_user 
             )
-            db.session.add(notification_to_add) # Add notification to the session
+            session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.add(notification_to_add) # Add notification to the session
         # --- End Notification Logic ---
         
         # --- START OF FIX: Only sync customer stage if there is only ONE job/project ---
@@ -877,7 +972,12 @@ def update_job_stage(job_id):
 
 
         # Commit ALL changes (stage update, notification, AND customer sync) together
-        db.session.commit() 
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.commit() 
 
         return jsonify({
             'message': 'Stage updated successfully',
@@ -887,6 +987,11 @@ def update_job_stage(job_id):
         }), 200
 
     except Exception as e:
-        db.session.rollback() # Rollback ALL changes if anything fails
+        session = SessionLocal()
+# ...do stuff...
+session.add(...)
+session.commit()
+session.close()
+.rollback() # Rollback ALL changes if anything fails
         # current_app.logger.error(f"❌ Error updating job stage for {job_id}: {e}") # Log error
         return jsonify({'error': f'Failed to update stage: {str(e)}'}), 500
