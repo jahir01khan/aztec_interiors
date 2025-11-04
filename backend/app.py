@@ -123,9 +123,9 @@ if __name__ == "__main__":
     # Import models to register metadata
     from backend import models  # ensures all classes subclass Base
 
-    # Create missing tables (safe)
-    Base.metadata.create_all(bind=engine)
-    test_connection()
+    # # Create missing tables (safe)
+    # Base.metadata.create_all(bind=engine)
+    # test_connection()
 
     # List tables
     from sqlalchemy import inspect

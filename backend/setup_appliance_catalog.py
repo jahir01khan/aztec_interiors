@@ -10,7 +10,7 @@ def setup_appliance_catalog():
         print("Setting up Appliance Catalog...")
         
         # Create tables
-        Base.metadata.create_all(bind=engine)
+        # Base.metadata.create_all(bind=engine)
 
         
         # Create sample brands
