@@ -5,20 +5,24 @@ import os
 # Add parent directory to path so we can import app and backend
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from backend.db import SessionLocal
-from backend.models import User  # Import your ORM models directly here
+from backend.db import Base, engine, SessionLocal
+from backend.models import *  # Import all models
 
 def init_database():
-    """Initialize the database with default data (users) only"""
+    """Initialize the database schema and default data"""
     try:
         print("=" * 60)
-        print("🔧 INITIALIZING DATABASE DEFAULT DATA...")
+        print("🔧 INITIALIZING DATABASE SCHEMA & DEFAULT DATA...")
         print("=" * 60)
 
-        # Start a session
+        # 1️⃣ Create all tables (safe: only creates missing ones)
+        Base.metadata.create_all(bind=engine)
+        print("✅ Database schema created or verified successfully!")
+
+        # 2️⃣ Start a session
         session = SessionLocal()
 
-        # Check if users exist
+        # 3️⃣ Check if users exist
         user_count = session.query(User).count()
         if user_count == 0:
             print("\n👤 Creating default users...")
@@ -59,9 +63,9 @@ def init_database():
             print("✅ Default users created successfully!")
 
         else:
-            print(f"\n✓ Users already exist ({user_count} users), skipping user creation")
+            print(f"✓ Users already exist ({user_count} users), skipping creation.")
 
-        print("\n✅ DATABASE DEFAULT DATA INITIALIZATION COMPLETE!")
+        print("\n✅ DATABASE INITIALIZATION COMPLETE!")
         print("=" * 60)
 
     except Exception as e:
