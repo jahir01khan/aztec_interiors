@@ -261,6 +261,9 @@ def handle_customer_drawings():
             return jsonify({'error': 'Customer ID query parameter is required'}), 400
 
         try:
+            # Assuming DrawingDocument.query is available (e.g., if using Flask-SQLAlchemy or similar global session access)
+            # Since you're using SessionLocal in POST/DELETE, a new session should probably be used here too for consistency,
+            # but I'll stick to the provided example which uses a global query object.
             drawings = DrawingDocument.query.filter_by(customer_id=customer_id)\
                                              .order_by(DrawingDocument.created_at.desc())\
                                              .all()
@@ -308,6 +311,16 @@ def handle_customer_drawings():
                 category = 'pdf'
             else:
                 category = 'other'
+            
+            # --- FIX FOR 'get_full_name' ERROR ---
+            uploaded_by = 'System' 
+            if hasattr(request, 'current_user') and request.current_user and hasattr(request.current_user, 'get_full_name'):
+                try:
+                    uploaded_by = request.current_user.get_full_name()
+                except Exception:
+                    # Fallback if the method exists but fails for some reason
+                    uploaded_by = str(request.current_user)
+            # --- END FIX ---
 
             # Create database record
             new_drawing = DrawingDocument(
@@ -319,7 +332,7 @@ def handle_customer_drawings():
                 file_url=f"/files/drawings/view/{unique_filename}", 
                 mime_type=mime_type,
                 category=category,
-                uploaded_by=request.current_user.get_full_name() if hasattr(request, 'current_user') else 'System'
+                uploaded_by=uploaded_by # Use the safely determined value
             )
 
             session.add(new_drawing)
