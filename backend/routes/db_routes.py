@@ -1,3 +1,4 @@
+import os
 from flask import Blueprint, request, jsonify, current_app
 import json
 from datetime import datetime, date # Import date separately for explicit use
@@ -76,7 +77,16 @@ def handle_customers():
 
         # GET all customers (FIXED: Uses session.query)
         customers = session.query(Customer).order_by(Customer.created_at.desc()).all()
-        return jsonify([c.to_dict(include_projects=False) for c in customers])
+        
+        # FIX: Explicitly include 'postcode' in the customer list serialization
+        customer_list = []
+        for c in customers:
+            customer_dict = c.to_dict(include_projects=False)
+            # Assuming the postcode property exists on the Customer model instance
+            customer_dict['postcode'] = getattr(c, 'postcode', None) or getattr(c, 'post_code', None) or None
+            customer_list.append(customer_dict)
+
+        return jsonify(customer_list)
 
     except Exception as e:
         session.rollback()
@@ -557,9 +567,9 @@ def get_pipeline_data():
                     'job': { # Mapping Project to 'job' for frontend compatibility
                         'id': project.id,
                         'customer_id': customer.id,
-                        'job_reference': f"PROJ-{project.name}",
-                        'job_name': project.name,
-                        'job_type': getattr(project, 'project_type', 'Unknown'), # Assuming project_type exists
+                        'job_reference': f"PROJ-{getattr(project, 'project_name', 'N/A')}", 
+                        'job_name': getattr(project, 'project_name', 'N/A'), 
+                        'job_type': getattr(project, 'project_type', 'Unknown'), 
                         'stage': project.stage,
                         'priority': 'Medium',
                         'quote_price': None, 'agreed_price': None, 'sold_amount': None,
@@ -714,11 +724,13 @@ def handle_projects():
         if request.method == 'POST':
             data = request.json
             project = Project(
-                name=data.get('name', ''),
+                # Use project_name to match the frontend state/interface definition
+                # and avoid conflicts if the model uses 'name' for another purpose.
+                # Assuming 'project_name' is the attribute on the Python model.
+                project_name=data.get('project_name', data.get('name', '')),
                 customer_id=data.get('customer_id'),
-                # Ensure date parsing works correctly
-                start_date=datetime.strptime(data['start_date'], '%Y-%m-%d').date() if data.get('start_date') else None,
-                end_date=datetime.strptime(data['end_date'], '%Y-%m-%d').date() if data.get('end_date') else None,
+                project_type=data.get('project_type'), # Assuming project_type is passed in the payload
+                date_of_measure=datetime.strptime(data['date_of_measure'], '%Y-%m-%d').date() if data.get('date_of_measure') else None,
                 stage=data.get('stage', 'Planning'),
                 created_by=get_current_user_email(data), # FIXED: Use robust helper
                 notes=data.get('notes', '')

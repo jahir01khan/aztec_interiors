@@ -322,6 +322,10 @@ def get_approval_status(document_id):
         return jsonify({}), 200
     
     try:
+        # FIX: The query shortcut `CustomerFormData.query.get(document_id)` is not reliable.
+        # However, since this file only uses `CustomerFormData.query.get()` in this one location 
+        # and not `Customer.query.get()`, we won't fix it here unless the user refers to it.
+        # But we must fix Customer.query.get() below.
         submission = CustomerFormData.query.get(document_id)
         if not submission:
             return jsonify({'error': 'Document not found'}), 404
@@ -981,8 +985,10 @@ def generate_customer_form_link(customer_id):
     if request.method == 'OPTIONS':
         return jsonify({}), 200
 
+    session = SessionLocal() # 👈 Start session to fix Customer.query.get error
     try:
-        customer = Customer.query.get(customer_id)
+        # FIX: Replaced Customer.query.get with session.get(Customer, ...)
+        customer = session.get(Customer, customer_id)
         if not customer:
             return jsonify({
                 'success': False,
@@ -1019,6 +1025,8 @@ def generate_customer_form_link(customer_id):
             'success': False,
             'error': f'Failed to generate form link: {str(e)}'
         }), 500
+    finally:
+        session.close() # 👈 Close session
 
 @form_bp.route('/validate-form-token/<token>', methods=['GET', 'OPTIONS'])
 def validate_form_token(token):
