@@ -261,9 +261,7 @@ def handle_customer_drawings():
             return jsonify({'error': 'Customer ID query parameter is required'}), 400
 
         try:
-            # Assuming DrawingDocument.query is available (e.g., if using Flask-SQLAlchemy or similar global session access)
-            # Since you're using SessionLocal in POST/DELETE, a new session should probably be used here too for consistency,
-            # but I'll stick to the provided example which uses a global query object.
+            # Note: This block assumes an implicit session or a global query object is set up for 'DrawingDocument.query'
             drawings = DrawingDocument.query.filter_by(customer_id=customer_id)\
                                              .order_by(DrawingDocument.created_at.desc())\
                                              .all()
@@ -312,15 +310,21 @@ def handle_customer_drawings():
             else:
                 category = 'other'
             
-            # --- FIX FOR 'get_full_name' ERROR ---
+            # 🎨 --- FIX FOR 'get_full_name' ERROR ---
             uploaded_by = 'System' 
-            if hasattr(request, 'current_user') and request.current_user and hasattr(request.current_user, 'get_full_name'):
+            
+            # Check for the current user object AND the correct property 'full_name'
+            if hasattr(request, 'current_user') and request.current_user and hasattr(request.current_user, 'full_name'):
                 try:
-                    uploaded_by = request.current_user.get_full_name()
-                except Exception:
-                    # Fallback if the method exists but fails for some reason
-                    uploaded_by = str(request.current_user)
-            # --- END FIX ---
+                    # Access the property directly (request.current_user.full_name)
+                    uploaded_by = request.current_user.full_name
+                except Exception as user_err:
+                    current_app.logger.warning(f"Error accessing user full_name: {user_err}")
+                    # Fallback if property exists but access fails (e.g., missing first_name)
+                    if hasattr(request.current_user, 'email'):
+                        uploaded_by = request.current_user.email
+                    
+            # 🎨 --- END FIX ---
 
             # Create database record
             new_drawing = DrawingDocument(
