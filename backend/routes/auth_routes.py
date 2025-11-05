@@ -1,6 +1,4 @@
 from flask import Blueprint, request, jsonify, current_app, g
-# REMOVED: from ..database import db 
-
 from ..models import User, LoginAttempt, Session
 from datetime import datetime, timedelta
 from functools import wraps
@@ -9,15 +7,14 @@ import re
 import jwt
 import os
 
-# 👈 NEW IMPORT: Required for all database write operations
-from ..db import SessionLocal
+from ..db import SessionLocal # 👈 SessionLocal is required for all native queries
 
 auth_bp = Blueprint('auth', __name__)
 
 # ============================================
 # 🔧 TEMPORARY DEV MODE (REMOVE IN PRODUCTION)
 # ============================================
-DEV_MODE = os.getenv('DEV_MODE', 'true').lower() == 'true'  # Set to 'false' in production
+DEV_MODE = os.getenv('DEV_MODE', 'true').lower() == 'true' # Set to 'false' in production
 
 # --- Configuration and Helpers ---
 
@@ -51,22 +48,29 @@ def validate_password(password):
     return True, "Password is valid"
 
 def check_rate_limit(email, max_attempts=5, window_minutes=15):
-    """Check if user has exceeded login attempts"""
+    """Check if user has exceeded login attempts (FIXED QUERY)"""
     # ⚠️ DISABLED IN DEV MODE
     if DEV_MODE:
         return True
     
-    cutoff_time = datetime.utcnow() - timedelta(minutes=window_minutes)
-    
-    # Needs a session for the query, but we don't commit anything. 
-    # Using the implicit query session here, assuming it's configured.
-    recent_attempts = LoginAttempt.query.filter(
-        LoginAttempt.email == email,
-        LoginAttempt.attempted_at > cutoff_time,
-        LoginAttempt.success == False
-    ).count()
-    
-    return recent_attempts < max_attempts
+    session = SessionLocal() # Start local session for read-only query
+    try:
+        cutoff_time = datetime.utcnow() - timedelta(minutes=window_minutes)
+        
+        # FIXED: Use session.query(Model) instead of Model.query
+        recent_attempts = session.query(LoginAttempt).filter(
+            LoginAttempt.email == email,
+            LoginAttempt.attempted_at > cutoff_time,
+            LoginAttempt.success == False
+        ).count()
+        
+        return recent_attempts < max_attempts
+    except Exception as e:
+        print(f"Warning: Could not check rate limit: {e}")
+        return True # Default to allowing login if rate limit check fails
+    finally:
+        session.close()
+
 
 def log_login_attempt(email, ip_address, success):
     """Log login attempt (must manage its own session)"""
@@ -88,95 +92,113 @@ def log_login_attempt(email, ip_address, success):
 # --- Decorators ---
 
 def token_required(f):
-    """Decorator to require valid JWT token"""
+    """Decorator to require valid JWT token (FIXED QUERIES)"""
     @wraps(f)
     def decorated(*args, **kwargs):
-        # ⚠️ DEV MODE: Accept any token or no token
-        if DEV_MODE:
-            # Logic remains the same, querying User.query is fine for dev mode.
-            token = None
-            if 'Authorization' in request.headers:
-                try:
-                    token = request.headers['Authorization'].split(" ")[1]
-                    if token == 'mock-jwt-token-123':
-                        # Mock user for testing
-                        mock_user = User.query.first()
-                        if mock_user:
-                            g.user = mock_user
-                        else:
-                            # Create a mock user object if no users exist
-                            g.user = type('User', (), {
-                                'id': 1,
-                                'email': 'dev@test.com',
-                                'first_name': 'Dev',
-                                'last_name': 'User',
-                                'role': 'Manager',
-                                'is_active': True,
-                                'to_dict': lambda: {
+        
+        # NOTE: Session is needed inside the decorator because it accesses the DB models (User, Session)
+        local_session = SessionLocal()
+        
+        try:
+            # ⚠️ DEV MODE: Accept any token or no token
+            if DEV_MODE:
+                token = None
+                if 'Authorization' in request.headers:
+                    try:
+                        token = request.headers['Authorization'].split(" ")[1]
+                        
+                        if token == 'mock-jwt-token-123':
+                            # Mock user for testing
+                            # FIXED: Use session.query(User)
+                            mock_user = local_session.query(User).first() 
+                            
+                            if mock_user:
+                                g.user = mock_user
+                            else:
+                                # Create a mock user object if no users exist
+                                g.user = type('User', (), {
                                     'id': 1,
                                     'email': 'dev@test.com',
                                     'first_name': 'Dev',
                                     'last_name': 'User',
-                                    'role': 'Manager'
-                                }
-                            })()
-                        return f(*args, **kwargs)
-                except:
-                    pass
-            
-            # If no valid token, try to get first user from DB
-            user = User.query.first()
-            if user:
-                g.user = user
-                return f(*args, **kwargs)
-            
-            # Last resort: create mock user
-            g.user = type('User', (), {
-                'id': 1,
-                'email': 'dev@test.com',
-                'first_name': 'Dev',
-                'last_name': 'User',
-                'role': 'Manager',
-                'is_active': True,
-                'to_dict': lambda: {
+                                    'role': 'Manager',
+                                    'is_active': True,
+                                    'to_dict': lambda: {
+                                        'id': 1,
+                                        'email': 'dev@test.com',
+                                        'first_name': 'Dev',
+                                        'last_name': 'User',
+                                        'role': 'Manager'
+                                    }
+                                })()
+                            return f(*args, **kwargs)
+                    except:
+                        pass
+                
+                # If no valid token, try to get first user from DB
+                # FIXED: Use session.query(User)
+                user = local_session.query(User).first()
+                
+                if user:
+                    g.user = user
+                    return f(*args, **kwargs)
+                
+                # Last resort: create mock user
+                g.user = type('User', (), {
                     'id': 1,
                     'email': 'dev@test.com',
                     'first_name': 'Dev',
                     'last_name': 'User',
-                    'role': 'Manager'
-                }
-            })()
-            return f(*args, **kwargs)
-        
-        # PRODUCTION MODE: Full JWT validation
-        token = None
-        if 'Authorization' in request.headers:
+                    'role': 'Manager',
+                    'is_active': True,
+                    'to_dict': lambda: {
+                        'id': 1,
+                        'email': 'dev@test.com',
+                        'first_name': 'Dev',
+                        'last_name': 'User',
+                        'role': 'Manager'
+                    }
+                })()
+                return f(*args, **kwargs)
+            
+            # PRODUCTION MODE: Full JWT validation
+            token = None
+            if 'Authorization' in request.headers:
+                try:
+                    token = request.headers['Authorization'].split(" ")[1]
+                except IndexError:
+                    return jsonify({'error': 'Invalid token format'}), 401
+
+            if not token:
+                return jsonify({'error': 'Token is missing'}), 401
+
             try:
-                token = request.headers['Authorization'].split(" ")[1]
-            except IndexError:
-                return jsonify({'error': 'Invalid token format'}), 401
+                payload = jwt.decode(token, current_app.config['SECRET_KEY'], algorithms=['HS256'])
+                
+                # FIXED: Use session.get() or query(User)
+                user = local_session.get(User, payload['user_id']) 
+                
+                if not user or not user.is_active:
+                    return jsonify({'error': 'User not found or inactive'}), 401
 
-        if not token:
-            return jsonify({'error': 'Token is missing'}), 401
+                # FIXED: Use session.query(Session)
+                session_record = local_session.query(Session).filter_by(session_token=token, user_id=user.id).first()
+                
+                if not session_record or session_record.expires_at < datetime.utcnow():
+                    return jsonify({'error': 'Token expired'}), 401
 
-        try:
-            payload = jwt.decode(token, current_app.config['SECRET_KEY'], algorithms=['HS256'])
-            user = User.query.get(payload['user_id'])
-            if not user or not user.is_active:
-                return jsonify({'error': 'User not found or inactive'}), 401
+                g.user = user
 
-            session_record = Session.query.filter_by(session_token=token, user_id=user.id).first()
-            if not session_record or session_record.expires_at < datetime.utcnow():
+            except jwt.ExpiredSignatureError:
                 return jsonify({'error': 'Token expired'}), 401
+            except jwt.InvalidTokenError:
+                return jsonify({'error': 'Invalid token'}), 401
 
-            g.user = user
-
-        except jwt.ExpiredSignatureError:
-            return jsonify({'error': 'Token expired'}), 401
-        except jwt.InvalidTokenError:
-            return jsonify({'error': 'Invalid token'}), 401
-
-        return f(*args, **kwargs)
+            return f(*args, **kwargs)
+            
+        finally:
+            local_session.close() # Close the session created for the decorator's work
+            
     return decorated
 
 def admin_required(f):
@@ -388,16 +410,22 @@ def get_current_user():
 @auth_bp.route('/auth/users/staff', methods=['GET'])
 @admin_required
 def get_staff_users():
-    """Get all staff users"""
-    # Read-only endpoint
+    """Get all staff users (FIXED QUERY)"""
+    session = SessionLocal() # Start session for read-only query
     try:
         staff_roles = ['Sales', 'Production', 'Staff']
-        staff_users = User.query.filter(User.role.in_(staff_roles)).order_by(User.first_name).all()
+        # FIXED: Use session.query(User).filter(...) instead of User.query.filter(...)
+        staff_users = session.query(User).filter(
+            User.role.in_(staff_roles)
+        ).order_by(User.first_name).all()
+        
         return jsonify({
             'users': [user.to_dict() for user in staff_users]
         }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    finally:
+        session.close() # Close session for read-only route
 
 @auth_bp.route('/auth/refresh', methods=['POST'])
 @token_required
@@ -538,7 +566,6 @@ def change_password():
         user = g.user # User is fetched by token_required, but may need re-attaching/fetching within session
         
         # Re-fetch user in the current session context if necessary, or just use g.user if it's still valid/attached
-        # Since g.user is typically from an external session (JWT verification), let's ensure it's managed by this new session:
         user = session.merge(user)
         
         if not user.check_password(current_password):
@@ -565,15 +592,19 @@ def change_password():
 @auth_bp.route('/auth/users', methods=['GET'])
 @admin_required
 def get_users():
-    """Get all users"""
-    # Read-only endpoint
+    """Get all users (FIXED QUERY)"""
+    session = SessionLocal() # Start session for read-only query
     try:
-        users = User.query.order_by(User.created_at.desc()).all()
+        # FIXED: Use session.query(User).order_by(...) instead of User.query.order_by(...)
+        users = session.query(User).order_by(User.created_at.desc()).all() 
+        
         return jsonify({
             'users': [user.to_dict() for user in users]
         }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    finally:
+        session.close() # Close session for read-only route
 
 @auth_bp.route('/auth/users/<int:user_id>/toggle-status', methods=['POST'])
 @admin_required
@@ -581,7 +612,7 @@ def toggle_user_status(user_id):
     """Toggle user active status"""
     session = SessionLocal() # 👈 Start session for transaction
     try:
-        # Get user using the active session
+        # Get user using the active session's .get method
         user = session.get(User, user_id)
         if not user:
             return jsonify({'error': 'User not found'}), 404

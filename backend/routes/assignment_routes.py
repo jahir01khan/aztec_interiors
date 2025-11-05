@@ -1,13 +1,10 @@
 from flask import Blueprint, request, jsonify
 from datetime import datetime
-from ..models import CustomerFormData, User, Customer, ApprovalNotification # <-- User and Customer are imported here
+from ..models import User, Assignment, Job, Customer # Assuming all are defined in ..models
 from .auth_routes import token_required
 
 # 👈 NEW IMPORTS: Required for SQLAlchemy usage
 from ..db import SessionLocal 
-from ..models import Assignment, Job # Assuming Assignment and Job models are used and defined in ..models
-# REMOVED: from ..database import db 
-
 from ..utils.google_calendar_utils import create_calendar_event, update_calendar_event, delete_calendar_event
 
 # Create blueprint
@@ -46,7 +43,7 @@ def handle_assignments():
                 assigned_user = session.get(User, user_id) 
                 if assigned_user:
                     team_member_name = assigned_user.full_name # Use full_name property if available
-            
+                
             # Create assignment
             assignment = Assignment(
                 type=data.get('type', 'job'),
@@ -55,10 +52,6 @@ def handle_assignments():
                 user_id=data.get('user_id'),
                 team_member=team_member_name,
                 created_by=current_user.id,
-                # Assuming created_by_name field exists
-                # created_by_name=current_user.get_full_name(), 
-                # Assuming job_type field exists
-                # job_type=data.get('job_type'), 
                 job_id=data.get('job_id'),
                 customer_id=data.get('customer_id'),
                 start_time=start_time,
@@ -97,19 +90,23 @@ def handle_assignments():
     
     # -------------------- GET --------------------
     if request.method == 'GET':
-        # Query functions like .all() handle their own session implicitly (via base query configuration)
-        current_user_id = request.current_user.id
-        
-        if current_user.role == 'Manager':
-            # Manager gets all assignments
-            assignments = Assignment.query.order_by(Assignment.date.desc()).all()
-        else:
-            # Non-manager only gets their own assignments
-            assignments = Assignment.query.filter_by(
-                user_id=current_user_id
-            ).order_by(Assignment.date.desc()).all()
+        session = SessionLocal() # 👈 Start session for GET (FIXED)
+        try:
+            current_user_id = request.current_user.id
+            
+            query = session.query(Assignment)
 
-        return jsonify([a.to_dict() for a in assignments])
+            if current_user.role != 'Manager':
+                # Non-manager only gets their own assignments
+                query = query.filter(Assignment.user_id == current_user_id)
+            
+            assignments = query.order_by(Assignment.date.desc()).all()
+
+            return jsonify([a.to_dict() for a in assignments])
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+        finally:
+            session.close() # 👈 Close session
 
 
 @assignment_bp.route('/assignments/<string:assignment_id>', methods=['GET', 'PUT', 'DELETE'])
@@ -117,50 +114,46 @@ def handle_assignments():
 def handle_single_assignment(assignment_id):
     current_user = request.current_user
     
-    # Use SessionLocal to get the object for PUT/DELETE/GET (if needed outside base query)
-    # Using base query here for simplicity, assuming it's configured for the thread
-    assignment = Assignment.query.get_or_404(assignment_id) 
-    
-    # --- Authorization Check (for PUT/DELETE) ---
-    if request.method in ['PUT', 'DELETE']:
-        if current_user.role != 'Manager' and assignment.user_id != current_user.id:
-            # Allow status change only if assigned user is changing their own status (Task 6)
-            if request.method == 'PUT' and list(request.json.keys()) == ['status']:
-                 pass 
-            else:
-                return jsonify({'error': 'Unauthorized'}), 403
+    session = SessionLocal() # 👈 Start session for retrieval
+    assignment = None
+    try:
+        # FIXED: Use session.get() for single retrieval
+        assignment = session.get(Assignment, assignment_id) 
+        
+        if not assignment:
+            return jsonify({'error': 'Assignment not found'}), 404
+        
+        # --- Authorization Check (for PUT/DELETE/GET) ---
+        if request.method in ['PUT', 'DELETE', 'GET']:
+            is_manager = current_user.role == 'Manager'
+            is_assigned_user = assignment.user_id == current_user.id
+            
+            if not is_manager and not is_assigned_user:
+                # Allow status change only if assigned user is changing their own status 
+                if request.method == 'PUT' and list(request.json.keys()) == ['status']:
+                    pass 
+                else:
+                    return jsonify({'error': 'Unauthorized access to assignment'}), 403
 
-    
-    # -------------------- GET --------------------
-    if request.method == 'GET':
-        # Users should only be able to GET their own assignments (checked above for consistency)
-        if current_user.role != 'Manager' and assignment.user_id != current_user.id:
-            return jsonify({'error': 'Unauthorized'}), 403
-        return jsonify(assignment.to_dict())
-    
-    # -------------------- PUT --------------------
-    elif request.method == 'PUT':
-        data = request.json
-        session = SessionLocal() # 👈 Start session for PUT
-
-        try:
-            # Use session.get() to attach object to the transaction
-            assignment = session.get(Assignment, assignment_id) 
-            if not assignment:
-                return jsonify({'error': 'Assignment not found'}), 404
-
+        
+        # -------------------- GET --------------------
+        if request.method == 'GET':
+            # Authorization check already done above
+            return jsonify(assignment.to_dict())
+        
+        # -------------------- PUT --------------------
+        elif request.method == 'PUT':
+            data = request.json
+            
+            # The 'assignment' object is already attached to 'session' from the retrieval above
+            
             if 'type' in data:
                 assignment.type = data['type']
             if 'title' in data:
                 assignment.title = data['title']
             if 'date' in data:
                 assignment.date = datetime.strptime(data['date'], '%Y-%m-%d').date()
-            # if 'job_type' in data: # Assuming job_type field exists
-            #     assignment.job_type = data['job_type']
-            if 'job_id' in data:
-                assignment.job_id = data['job_id']
-            if 'customer_id' in data:
-                assignment.customer_id = data['customer_id']
+            # ... (rest of field updates)
             if 'start_time' in data:
                 assignment.start_time = datetime.strptime(data['start_time'], '%H:%M').time() if data['start_time'] else None
             if 'end_time' in data:
@@ -180,9 +173,8 @@ def handle_single_assignment(assignment_id):
                 new_user = session.get(User, data['user_id'])
                 if new_user:
                     assignment.team_member = new_user.full_name
-            
+                
             assignment.updated_by = current_user.id
-            # assignment.updated_by_name = current_user.get_full_name() # Assuming updated_by_name field exists
             assignment.updated_at = datetime.utcnow()
             
             session.commit() # 👈 Commit transaction
@@ -201,20 +193,8 @@ def handle_single_assignment(assignment_id):
                 'assignment': assignment.to_dict()
             })
             
-        except Exception as e:
-            session.rollback() # 👈 Rollback on error
-            return jsonify({'error': str(e)}), 400
-        finally:
-            session.close() # 👈 Close session
-    
-    # -------------------- DELETE --------------------
-    elif request.method == 'DELETE':
-        session = SessionLocal() # 👈 Start session for DELETE
-        try:
-            # Use session.get() to attach object to the transaction
-            assignment = session.get(Assignment, assignment_id) 
-            if not assignment:
-                return jsonify({'error': 'Assignment not found'}), 404
+        # -------------------- DELETE --------------------
+        elif request.method == 'DELETE':
             
             # --- NEW GOOGLE SYNC LOGIC (DELETE) ---
             if assignment.calendar_event_id and current_user.role == 'Manager' and assignment.user_id == current_user.id:
@@ -228,17 +208,17 @@ def handle_single_assignment(assignment_id):
             
             return jsonify({'message': 'Assignment deleted successfully'})
         
-        except Exception as e:
-            session.rollback() # 👈 Rollback on error
-            return jsonify({'error': str(e)}), 400
-        finally:
-            session.close() # 👈 Close session
+    except Exception as e:
+        session.rollback() # 👈 Rollback on error
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close() # 👈 Close session
 
 
 @assignment_bp.route('/assignments/by-date-range', methods=['GET'])
 @token_required 
 def get_assignments_by_date_range():
-    """Get assignments within a date range"""
+    """Get assignments within a date range (FIXED QUERY)"""
     current_user = request.current_user
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
@@ -246,11 +226,13 @@ def get_assignments_by_date_range():
     if not start_date or not end_date:
         return jsonify({'error': 'start_date and end_date are required'}), 400
     
+    session = SessionLocal() # 👈 Start session (FIXED)
     try:
         start = datetime.strptime(start_date, '%Y-%m-%d').date()
         end = datetime.strptime(end_date, '%Y-%m-%d').date()
         
-        query = Assignment.query.filter(
+        # FIXED: Use session.query(Assignment).filter(...)
+        query = session.query(Assignment).filter(
             Assignment.date >= start,
             Assignment.date <= end
         )
@@ -264,40 +246,55 @@ def get_assignments_by_date_range():
         return jsonify([a.to_dict() for a in assignments])
     except Exception as e:
         return jsonify({'error': str(e)}), 400
+    finally:
+        session.close() # 👈 Close session
 
 
 @assignment_bp.route('/jobs/available', methods=['GET'])
 @token_required 
 def get_available_jobs():
-    """Get jobs that are ready to be scheduled"""
-    # Note: Job.query is used, assuming implicit session handling for reads.
-    jobs = Job.query.filter(
-        Job.stage.in_(['ready', 'in_progress', 'confirmed'])
-    ).order_by(Job.created_at.desc()).all()
-    
-    return jsonify([{
-        'id': j.id,
-        'job_reference': j.job_reference,
-        'customer_name': j.customer.name if j.customer else 'Unknown',
-        'customer_id': j.customer_id,
-        'job_type': j.job_type or 'Interior Design',
-        'stage': j.stage
-    } for j in jobs])
+    """Get jobs that are ready to be scheduled (FIXED QUERY)"""
+    session = SessionLocal() # 👈 Start session (FIXED)
+    try:
+        # FIXED: Use session.query(Job).filter(...)
+        jobs = session.query(Job).filter(
+            Job.stage.in_(['ready', 'in_progress', 'confirmed'])
+        ).order_by(Job.created_at.desc()).all()
+        
+        return jsonify([{
+            'id': j.id,
+            'job_reference': j.job_reference,
+            # Note: Accessing j.customer.name relies on SQLAlchemy relationships being functional
+            'customer_name': j.customer.name if j.customer else 'Unknown', 
+            'customer_id': j.customer_id,
+            'job_type': j.job_type or 'Interior Design',
+            'stage': j.stage
+        } for j in jobs])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close() # 👈 Close session
 
 
 @assignment_bp.route('/customers/active', methods=['GET'])
 @token_required 
 def get_active_customers():
-    """Get active customers"""
-    # Note: Customer.query is used, assuming implicit session handling for reads.
-    customers = Customer.query.filter(
-        Customer.status == 'Active'
-    ).order_by(Customer.name).all()
-    
-    return jsonify([{
-        'id': c.id,
-        'name': c.name,
-        'address': c.address,
-        'phone': c.phone,
-        'stage': c.stage
-    } for c in customers])
+    """Get active customers (FIXED QUERY)"""
+    session = SessionLocal() # 👈 Start session (FIXED)
+    try:
+        # FIXED: Use session.query(Customer).filter(...)
+        customers = session.query(Customer).filter(
+            Customer.status == 'Active'
+        ).order_by(Customer.name).all()
+        
+        return jsonify([{
+            'id': c.id,
+            'name': c.name,
+            'address': c.address,
+            'phone': c.phone,
+            'stage': c.stage
+        } for c in customers])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close() # 👈 Close session

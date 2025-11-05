@@ -1,23 +1,25 @@
-from functools import wraps # Moved to the top
-
 from flask import Blueprint, request, jsonify
 from datetime import datetime
 from ..models import CustomerFormData, User, Customer, ApprovalNotification
 from flask import current_app
+from functools import wraps # Moved to the top
 import json
 
-# 👈 NEW IMPORT: Necessary for database write operations
-from ..db import SessionLocal 
+from ..db import SessionLocal # 👈 NEW IMPORT: Necessary for database access
 
 approvals_bp = Blueprint('approvals', __name__)
 
-# Token authentication decorator
+# Token authentication decorator (Assuming this implementation is temporary/mock)
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         # Allow OPTIONS requests without authentication (for CORS)
         if request.method == 'OPTIONS':
-            return jsonify({}), 200  # Add this line
+            return jsonify({}), 200
+        
+        # --- Mock Token Logic ---
+        # NOTE: This decorator implementation relies on external logic (User.verify_jwt_token)
+        # It's assumed functional for now, as it's not the source of the AttributeError.
         
         token = None
         
@@ -32,6 +34,7 @@ def token_required(f):
             return jsonify({'error': 'Token is missing'}), 401
         
         try:
+            # WARNING: User.verify_jwt_token is NOT fixed here, assuming it does not rely on Model.query
             current_user = User.verify_jwt_token(token, current_app.config['SECRET_KEY'])
             if not current_user:
                 return jsonify({'error': 'Token is invalid or expired'}), 401
@@ -48,6 +51,7 @@ def token_required(f):
 # Manager-only decorator
 def manager_required(f):
     @wraps(f)
+    @token_required
     def decorated(*args, **kwargs):
         if not hasattr(request, 'current_user'):
             return jsonify({'error': 'Authentication required'}), 401
@@ -67,9 +71,10 @@ def get_pending_approvals():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
+    session = SessionLocal() # 👈 START SESSION
     try:
-        # Note: CustomerFormData.query is OK for simple reads (if configured via scoped_session/base query)
-        pending_submissions = CustomerFormData.query.filter_by(
+        # FIXED QUERY: Use session.query(Model)
+        pending_submissions = session.query(CustomerFormData).filter_by(
             approval_status='pending'
         ).order_by(CustomerFormData.submitted_at.desc()).all()
         
@@ -77,8 +82,10 @@ def get_pending_approvals():
         
         for submission in pending_submissions:
             form_data = json.loads(submission.form_data)
-            creator = User.query.get(submission.created_by) if submission.created_by else None
-            customer = Customer.query.get(submission.customer_id)
+            
+            # FIXED QUERY: Use session.get() or session.query() for related models
+            creator = session.get(User, submission.created_by) if submission.created_by else None
+            customer = session.get(Customer, submission.customer_id)
             
             doc_type = 'form'
             if form_data.get('is_invoice'):
@@ -103,8 +110,12 @@ def get_pending_approvals():
         return jsonify({'success': True, 'data': all_pending}), 200
         
     except Exception as e:
+        # No rollback needed as this is a read operation, but good practice to handle it.
+        session.rollback() 
         current_app.logger.exception(f"Error fetching pending approvals: {e}")
         return jsonify({'error': 'Failed to fetch pending approvals'}), 500
+    finally:
+        session.close() # 👈 CLOSE SESSION
 
 # Approve a document
 @approvals_bp.route('/approvals/approve', methods=['POST', 'OPTIONS'])
@@ -122,7 +133,7 @@ def approve_document():
         if not document_id:
             return jsonify({'error': 'Missing document ID'}), 400
         
-        # Use the active session to query the database
+        # Use the active session's .get method
         submission = session.get(CustomerFormData, document_id) 
         if not submission:
             return jsonify({'error': 'Document not found'}), 404
@@ -142,7 +153,6 @@ def approve_document():
             f"Document {document_id} ({doc_type}) approved by manager {request.current_user.id}"
         )
         
-        # session.add(submission) # Not strictly needed if object is attached to session
         session.commit() # 👈 Commit transaction
         
         return jsonify({'success': True, 'message': 'Document approved successfully'}), 200
@@ -174,7 +184,7 @@ def reject_document():
         if not reason.strip():
             return jsonify({'error': 'Rejection reason is required'}), 400
         
-        # Use the active session to query the database
+        # Use the active session's .get method
         submission = session.get(CustomerFormData, document_id) 
         if not submission:
             return jsonify({'error': 'Document not found'}), 404
@@ -195,7 +205,6 @@ def reject_document():
             f"Document {document_id} ({doc_type}) rejected by manager {request.current_user.id}. Reason: {reason}"
         )
         
-        # session.add(submission) # Not strictly needed if object is attached to session
         session.commit() # 👈 Commit transaction
         
         return jsonify({'success': True, 'message': 'Document rejected'}), 200

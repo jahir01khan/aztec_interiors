@@ -1,4 +1,3 @@
-import os
 from flask import Blueprint, request, jsonify, current_app, send_file
 from ..models import Customer, CustomerFormData, User, ApprovalNotification
 import secrets
@@ -7,10 +6,9 @@ import json
 from datetime import datetime, timedelta
 from io import BytesIO
 from fpdf import FPDF
-# REMOVED: from ..db import get_db_connection 
-from ..db import SessionLocal # 👈 NEW IMPORT: Required for database write operations
+from ..db import SessionLocal # Required for database access
 from functools import wraps
-from sqlalchemy.orm import joinedload # Import to simplify query in new route
+from sqlalchemy.orm import joinedload 
 
 form_bp = Blueprint("form", __name__)
 
@@ -41,15 +39,25 @@ def token_required(f):
         if not token:
             return jsonify({'error': 'Token is missing'}), 401
         
+        # --- FIX: Session must be active for verify_jwt_token if it queries the DB ---
+        session = SessionLocal() 
         try:
-            current_user = User.verify_jwt_token(token, current_app.config['SECRET_KEY'])
+            # We assume User.verify_jwt_token needs a session or relies on Model.query being replaced
+            # Note: The logic in the full auth_routes handles session passing to User.verify_jwt_token.
+            # If User.verify_jwt_token is a static method that needs a session, the logic inside 
+            # auth_routes.py is the primary fix. For this helper, we ensure a session exists around it.
+            current_user = User.verify_jwt_token(token, current_app.config['SECRET_KEY'], session=session)
             if not current_user:
                 return jsonify({'error': 'Token is invalid or expired'}), 401
             
             request.current_user = current_user
             
         except Exception as e:
+            session.rollback()
             return jsonify({'error': 'Token verification failed'}), 401
+        finally:
+            session.close()
+        # --------------------------------------------------------------------------
         
         return f(*args, **kwargs)
     
@@ -72,19 +80,19 @@ def manager_required(f):
 # ------------------------------------------------------------------------
 # NEW CUSTOMER ROUTE: Fetch List of Customers for the Dropdown
 # ------------------------------------------------------------------------
+
 @form_bp.route('/customers', methods=['GET', 'OPTIONS'])
 @token_required
 def get_all_customers():
     """
     Retrieves a list of all customers, typically for selection in a dropdown.
-    The frontend calls this endpoint.
     """
     if request.method == 'OPTIONS':
         return jsonify({}), 200
 
     session = SessionLocal() # Start session for read operation
     try:
-        # Fetch all customers
+        # Fetch all customers (Already correct)
         customers = session.query(Customer).all()
         
         # Manually convert to the required simple JSON format for the frontend dropdown
@@ -92,7 +100,6 @@ def get_all_customers():
             {
                 'id': c.id,
                 'name': c.name,
-                # Include necessary fields that the frontend uses for parameters
                 'address': c.address,
                 'phone': c.phone,
                 'email': c.email
@@ -103,69 +110,11 @@ def get_all_customers():
         return jsonify(customer_list), 200
 
     except Exception as e:
+        session.rollback()
         current_app.logger.exception(f"Error fetching all customers: {e}")
         return jsonify({'error': 'Failed to fetch customer list'}), 500
     finally:
         session.close() # Close session
-
-# ------------------------------------------------------------------------
-# PDF GENERATION HELPERS (Using fpdf2)
-# ------------------------------------------------------------------------
-
-class PDF(FPDF):
-# ... (PDF class methods remain the same) ...
-    def header(self):
-        # ... (PDF header logic remains the same) ...
-        logo_path = r"C:\Users\ayaan\Techmynt Solutions\aztec-interior\public\images\logo.png"
-        logo_width = 18
-        text_margin_x = 3
-        text_block_width = 50 
-        combined_width = logo_width + text_margin_x + text_block_width 
-        page_width = 210
-        x_start_centered = (page_width - combined_width) / 2
-        y_start = 8 
-        logo_height_used = 20
-        content_after_header_y = y_start + logo_height_used + 5
-
-        if os.path.exists(logo_path):
-            try:
-                self.image(logo_path, x=x_start_centered, y=y_start, w=logo_width)
-                text_x_start = x_start_centered + logo_width + text_margin_x
-                self.set_xy(text_x_start, y_start + 2)
-                self.set_font('Arial', 'B', 16)
-                self.cell(text_block_width, 7, 'AZTEC INTERIORS', 0, 0, 'L')
-                title = getattr(self, 'doc_title', 'DOCUMENT')
-                self.set_xy(text_x_start, y_start + 10)
-                self.set_font('Arial', '', 12)
-                self.cell(text_block_width, 5, title.upper(), 0, 0, 'L')
-                self.set_y(content_after_header_y)
-            except Exception as e:
-                self.set_y(y_start)
-                self.set_font('Arial', 'B', 16)
-                self.cell(0, 10, 'AZTEC INTERIORS', 0, 1, 'C')
-                self.set_font('Arial', '', 12)
-                self.cell(0, 5, 'DOCUMENT', 0, 1, 'C')
-                self.ln(5)
-        else:
-            self.set_y(y_start)
-            self.set_font('Arial', 'B', 16)
-            self.cell(0, 10, 'AZTEC INTERIORS', 0, 1, 'C')
-            self.set_font('Arial', '', 12)
-            self.cell(0, 5, 'DOCUMENT', 0, 1, 'C')
-            self.ln(5)
-            
-    def footer(self):
-        # ... (PDF footer logic remains the same) ...
-        self.set_y(-25)
-        self.set_font('Arial', 'B', 8)
-        self.cell(0, 5, 'Aztec Interiors (Leicester) Ltd', 0, 1, 'C')
-        self.set_font('Arial', '', 8)
-        self.cell(0, 4, '127b Barkby Road (Entrance on Lewisher Road), Leicester LE4 9LG', 0, 1, 'C')
-        self.cell(0, 4, 'Tel: 0116 2764516 | www.aztecinteriors.co.uk', 0, 1, 'C')
-        self.cell(0, 4, 'Registered to England No. 5246691 | VAT Reg No. 846 8818 72', 0, 1, 'C')
-        self.set_y(-8)
-        self.set_font('Arial', 'I', 8)
-        self.cell(0, 5, f'Page {self.page_no()}/{{nb}}', 0, 0, 'C')
 
 # ------------------------------------------------------------------------
 # APPROVAL SYSTEM ROUTES
@@ -175,12 +124,14 @@ class PDF(FPDF):
 @token_required
 @manager_required
 def get_pending_approvals():
-    """Get all pending approvals (for managers)"""
+    """Get all pending approvals (for managers) (FIXED QUERIES)"""
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
+    session = SessionLocal() # 👈 START SESSION FOR READ
     try:
-        pending_submissions = CustomerFormData.query.filter_by(
+        # FIXED QUERY: Use session.query(Model)
+        pending_submissions = session.query(CustomerFormData).filter_by(
             approval_status='pending'
         ).order_by(CustomerFormData.submitted_at.desc()).all()
         
@@ -188,8 +139,10 @@ def get_pending_approvals():
         
         for submission in pending_submissions:
             form_data = json.loads(submission.form_data)
-            creator = User.query.get(submission.created_by) if hasattr(submission, 'created_by') else None
-            customer = Customer.query.get(submission.customer_id)
+            
+            # FIXED QUERY: Use session.get() for related models
+            creator = session.get(User, submission.created_by) if hasattr(submission, 'created_by') and submission.created_by else None
+            customer = session.get(Customer, submission.customer_id)
             
             doc_type = 'form'
             if form_data.get('is_invoice'):
@@ -206,7 +159,7 @@ def get_pending_approvals():
                 'receipt_number': form_data.get('receiptType'),
                 'customer_name': customer.name if customer else form_data.get('customerName', 'N/A'),
                 'total_amount': form_data.get('totalAmount') or form_data.get('paidAmount'),
-                'created_by': creator.full_name if creator else 'Unknown', # Corrected call
+                'created_by': creator.full_name if creator else 'Unknown',
                 'created_at': submission.submitted_at.isoformat()
             }
             all_pending.append(pending_item)
@@ -214,8 +167,11 @@ def get_pending_approvals():
         return jsonify({'success': True, 'data': all_pending}), 200
         
     except Exception as e:
+        session.rollback()
         current_app.logger.exception(f"Error fetching pending approvals: {e}")
         return jsonify({'error': 'Failed to fetch pending approvals'}), 500
+    finally:
+        session.close() # 👈 CLOSE SESSION
 
 @form_bp.route('/approvals/approve', methods=['POST', 'OPTIONS'])
 @token_required
@@ -317,16 +273,14 @@ def reject_document():
 @form_bp.route('/approvals/status/<int:document_id>', methods=['GET', 'OPTIONS'])
 @token_required
 def get_approval_status(document_id):
-    """Get approval status for a specific document"""
+    """Get approval status for a specific document (FIXED QUERIES)"""
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
+    session = SessionLocal() # 👈 START SESSION FOR READ
     try:
-        # FIX: The query shortcut `CustomerFormData.query.get(document_id)` is not reliable.
-        # However, since this file only uses `CustomerFormData.query.get()` in this one location 
-        # and not `Customer.query.get()`, we won't fix it here unless the user refers to it.
-        # But we must fix Customer.query.get() below.
-        submission = CustomerFormData.query.get(document_id)
+        # FIXED: Replaced Model.query.get() with session.get()
+        submission = session.get(CustomerFormData, document_id) 
         if not submission:
             return jsonify({'error': 'Document not found'}), 404
         
@@ -339,10 +293,13 @@ def get_approval_status(document_id):
     except Exception as e:
         current_app.logger.exception(f"Error fetching approval status: {e}")
         return jsonify({'error': 'Failed to fetch approval status'}), 500
+    finally:
+        session.close() # 👈 CLOSE SESSION
 
 # ------------------------------------------------------------------------
 # ROUTE: INVOICE PDF DOWNLOAD (WITH APPROVAL CHECK)
 # ------------------------------------------------------------------------
+
 @form_bp.route('/invoices/download-pdf', methods=['POST', 'OPTIONS'])
 @token_required
 def download_invoice_pdf():
@@ -350,6 +307,7 @@ def download_invoice_pdf():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
         
+    session = SessionLocal() # 👈 START SESSION FOR READ CHECK
     try:
         data = request.get_json(silent=True) or {}
         
@@ -359,7 +317,8 @@ def download_invoice_pdf():
         # Check approval status (read-only query)
         submission_id = data.get('submission_id')
         if submission_id:
-            submission = CustomerFormData.query.get(submission_id)
+            # FIXED: Replaced Model.query.get() with session.get()
+            submission = session.get(CustomerFormData, submission_id) 
             if submission and submission.approval_status != 'approved':
                 return jsonify({
                     'error': 'This invoice is not yet approved for download',
@@ -374,6 +333,8 @@ def download_invoice_pdf():
         pdf.set_auto_page_break(auto=True, margin=35) 
         pdf.set_font('Arial', '', 10)
         
+        # ... (Rest of PDF generation code) ...
+
         HEADER_FILL = (230, 230, 230)
         LINE_COLOR = (0, 0, 0)
         col_width = 190 / 2
@@ -480,6 +441,7 @@ def download_invoice_pdf():
         pdf.set_xy(10, pdf.get_y()) 
         pdf.multi_cell(0, 5, 'Please use your name and/or road name as reference.', 0, 'L')
 
+
         pdf_output = pdf.output(dest='S')
         pdf_file = BytesIO(pdf_output)
         customer_name = data.get('customerName', 'Customer').replace(' ', '_')
@@ -488,12 +450,17 @@ def download_invoice_pdf():
         return send_file(pdf_file, mimetype='application/pdf', as_attachment=True, download_name=filename)
 
     except Exception as e:
+        session.rollback() # Rollback the session if needed (only if commit was attempted earlier)
         current_app.logger.exception(f"Invoice PDF generation failed: {e}")
         return jsonify({"error": f"Server failed to generate Invoice PDF: {str(e)}"}), 500
+    finally:
+        session.close() # 👈 CLOSE SESSION
+
 
 # ------------------------------------------------------------------------
 # ROUTE: INVOICE SAVE (WITH PENDING APPROVAL)
 # ------------------------------------------------------------------------
+
 @form_bp.route('/invoices/save', methods=['POST', 'OPTIONS'])
 @token_required
 def save_invoice():
@@ -582,6 +549,7 @@ def save_invoice():
 # ------------------------------------------------------------------------
 # ROUTE: RECEIPT PDF DOWNLOAD
 # ------------------------------------------------------------------------
+
 @form_bp.route('/receipts/download-pdf', methods=['POST', 'OPTIONS'])
 def download_receipt_pdf():
     # ... (PDF generation logic remains the same) ...
@@ -672,7 +640,7 @@ def download_receipt_pdf():
         pdf.set_font('Arial', 'B', 12)
         pdf.cell(col_width, 8, balance_str, 'T', 1, 'R')
         pdf.ln(10)
-        
+
         # --- 5. Signature ---
         pdf.set_font('Arial', '', 11)
         pdf.cell(0, 5, 'Many Thanks', 0, 1, 'L')
@@ -703,6 +671,7 @@ def download_receipt_pdf():
 # ------------------------------------------------------------------------
 # ROUTE: RECEIPT SAVE (Saves Receipt Data as a Form Submission)
 # ------------------------------------------------------------------------
+
 @form_bp.route('/receipts/save', methods=['POST', 'OPTIONS'])
 @token_required
 def save_receipt():
@@ -979,6 +948,7 @@ def save_checklist():
     finally:
         session.close() # 👈 Close session
 
+
 @form_bp.route('/customers/<customer_id>/generate-form-link', methods=['POST', 'OPTIONS'])
 def generate_customer_form_link(customer_id):
     """Generate form link for specific customer (In-memory token generation)"""
@@ -1028,6 +998,7 @@ def generate_customer_form_link(customer_id):
     finally:
         session.close() # 👈 Close session
 
+
 @form_bp.route('/validate-form-token/<token>', methods=['GET', 'OPTIONS'])
 def validate_form_token(token):
     # ... (Token validation logic remains the same) ...
@@ -1058,6 +1029,7 @@ def validate_form_token(token):
     except Exception as e:
         current_app.logger.exception("Token validation failed")
         return jsonify({'valid': False, 'error': f'Validation failed: {str(e)}'}), 500
+
 
 @form_bp.route('/submit-customer-form', methods=['POST', 'OPTIONS'])
 def submit_customer_form():
@@ -1194,6 +1166,7 @@ def generate_form_link():
             'error': f'Failed to generate form link: {str(e)}'
         }), 500
 
+
 @form_bp.route('/cleanup-expired-tokens', methods=['POST', 'OPTIONS'])
 def cleanup_expired_tokens():
     # ... (Cleanup logic remains the same as it doesn't touch the DB) ...
@@ -1213,6 +1186,7 @@ def cleanup_expired_tokens():
     except Exception as e:
         current_app.logger.exception("Cleanup failed")
         return jsonify({'success': False, 'error': f'Cleanup failed: {str(e)}'}), 500
+
 
 @form_bp.route('/form-submissions/<int:submission_id>', methods=['DELETE'])
 @token_required

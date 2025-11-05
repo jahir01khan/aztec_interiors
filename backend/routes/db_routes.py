@@ -37,8 +37,14 @@ def handle_users():
             session.add(user)
             session.commit()
             return jsonify({'id': user.id, 'message': 'User created successfully'}), 201
+        
+        # FIXED: Uses session.query
         users = session.query(User).all()
         return jsonify([u.to_dict() for u in users])
+    except Exception as e:
+        session.rollback()
+        current_app.logger.error(f"Error handling users: {e}")
+        return jsonify({'error': str(e)}), 500
     finally:
         session.close()
 
@@ -110,7 +116,7 @@ def handle_single_customer(customer_id):
             return jsonify({'error': 'Customer not found'}), 404
 
         if request.method == 'GET':
-            # FIXED: Uses session.query
+            # FIXED: Uses session.query for CustomerFormData
             form_entries = session.query(CustomerFormData).filter_by(customer_id=customer.id).order_by(CustomerFormData.submitted_at.desc()).all()
             form_submissions = []
             for f in form_entries:
@@ -136,6 +142,7 @@ def handle_single_customer(customer_id):
 
         elif request.method == 'PUT':
             data = request.json
+            # ... (Update logic for customer attributes) ...
             customer.name = data.get('name', customer.name)
             customer.address = data.get('address', customer.address)
             customer.phone = data.get('phone', customer.phone)
@@ -144,7 +151,7 @@ def handle_single_customer(customer_id):
             customer.preferred_contact_method = data.get('preferred_contact_method', customer.preferred_contact_method)
             customer.marketing_opt_in = data.get('marketing_opt_in', customer.marketing_opt_in)
             customer.notes = data.get('notes', customer.notes)
-            customer.updated_by = get_current_user_email(data) # FIXED: Use robust helper
+            customer.updated_by = get_current_user_email(data)
             customer.salesperson = data.get('salesperson', customer.salesperson)
             customer.project_types = data.get('project_types', customer.project_types)
             if data.get('date_of_measure'):
@@ -181,12 +188,13 @@ def update_customer_stage(customer_id):
         return jsonify({}), 200
     session = SessionLocal()
     try:
+        # FIXED: Uses session.query
         customer = session.query(Customer).filter_by(id=customer_id).first()
         if not customer:
             return jsonify({'error': 'Customer not found'}), 404
 
         data = request.json
-        updated_by_user = get_current_user_email(data) # FIXED: Use robust helper
+        updated_by_user = get_current_user_email(data)
         new_stage = data.get('stage')
         reason = data.get('reason', 'Stage updated via drag and drop')
         if not new_stage:
@@ -200,6 +208,7 @@ def update_customer_stage(customer_id):
         if new_stage not in valid_stages:
             return jsonify({'error': 'Invalid stage'}), 400
 
+        # FIXED: Uses session.query
         job_count = session.query(Job).filter_by(customer_id=customer_id).count()
         if (customer.projects and len(customer.projects) > 0) or job_count > 0:
             return jsonify({'message': 'Customer stage sync suppressed; projects/jobs exist.'}), 200
@@ -216,6 +225,7 @@ def update_customer_stage(customer_id):
         
         # Notification if accepted
         if new_stage == 'Accepted':
+            # FIXED: Uses session.query
             linked_job = session.query(Job).filter_by(customer_id=customer.id).first()
             notification = ProductionNotification(
                 job_id=linked_job.id if linked_job else None,
@@ -503,11 +513,11 @@ def get_pipeline_data():
         return jsonify({}), 200
     session = SessionLocal()
     try:
-        # The complex pipeline logic from the original log file which iterates over multiple models
-        # is generally safer than relying on a potentially incomplete 'to_dict' on the customer.
-        
+        # FIXED: Uses session.query
         customers = session.query(Customer).all()
+        # FIXED: Uses session.query
         jobs = session.query(Job).all()
+        # FIXED: Uses session.query
         projects = session.query(Project).all()
         
         jobs_by_customer = {c.id: [] for c in customers}
@@ -617,7 +627,7 @@ def handle_assignments():
                 description=data.get('description', ''),
                 assigned_to=data.get('assigned_to'),
                 due_date=datetime.strptime(data['due_date'], '%Y-%m-%d').date() if data.get('due_date') else None,
-                created_by=get_current_user_email(data) # FIXED: Use robust helper
+                created_by=get_current_user_email(data)
             )
             session.add(assignment)
             session.commit()
@@ -650,7 +660,7 @@ def handle_fitters():
                 name=data.get('name', ''),
                 email=data.get('email'),
                 phone=data.get('phone'),
-                created_by=get_current_user_email(data) # FIXED: Use robust helper
+                created_by=get_current_user_email(data)
             )
             session.add(fitter)
             session.commit()
@@ -682,7 +692,7 @@ def handle_quotations():
             quotation = Quotation(
                 customer_id=data.get('customer_id'),
                 total_amount=data.get('total_amount', 0),
-                created_by=get_current_user_email(data), # FIXED: Use robust helper
+                created_by=get_current_user_email(data),
                 notes=data.get('notes', '')
             )
             session.add(quotation)
@@ -726,13 +736,12 @@ def handle_projects():
             project = Project(
                 # Use project_name to match the frontend state/interface definition
                 # and avoid conflicts if the model uses 'name' for another purpose.
-                # Assuming 'project_name' is the attribute on the Python model.
                 project_name=data.get('project_name', data.get('name', '')),
                 customer_id=data.get('customer_id'),
                 project_type=data.get('project_type'), # Assuming project_type is passed in the payload
                 date_of_measure=datetime.strptime(data['date_of_measure'], '%Y-%m-%d').date() if data.get('date_of_measure') else None,
                 stage=data.get('stage', 'Planning'),
-                created_by=get_current_user_email(data), # FIXED: Use robust helper
+                created_by=get_current_user_email(data),
                 notes=data.get('notes', '')
             )
             session.add(project)

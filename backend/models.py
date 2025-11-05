@@ -8,7 +8,7 @@ from sqlalchemy.orm import relationship
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
 
-from .db import Base  # ✅ use declarative Base from db.py
+from .db import Base, SessionLocal  # ✅ use declarative Base from db.py
 
 # ----------------------------------
 # Helpers / Enums
@@ -108,18 +108,34 @@ class User(Base):
         return jwt.encode(payload, secret_key, algorithm='HS256')
 
     @staticmethod
-    def verify_jwt_token(token: str, secret_key: str):
-        from backend.db import SessionLocal
-
+    def verify_jwt_token(token: str, secret_key: str, session=None):
         try:
             payload = jwt.decode(token, secret_key, algorithms=['HS256'])
-            session = SessionLocal()
-            user = session.get(User, payload['user_id'])
-            session.close()
+            
+            # Use session if provided, otherwise manage a temporary session
+            if session is None:
+                local_session = SessionLocal()
+            else:
+                local_session = session
+                
+            # Lookup user using session.get (Correct Native SQLAlchemy)
+            # session.get() is safe and modern
+            user = local_session.get(User, payload['user_id'])
+            
+            # Only close session if it was locally created
+            if session is None:
+                local_session.close() 
+                
             return user if user and user.is_active else None
+        
         except jwt.ExpiredSignatureError:
             return None
         except jwt.InvalidTokenError:
+            return None
+        except Exception:
+            # Ensure the locally created session is closed on error
+            if session is None and 'local_session' in locals():
+                 local_session.close()
             return None
 
     def to_dict(self) -> dict:
@@ -227,27 +243,30 @@ class Customer(Base):
         if primary_job:
             self.stage = primary_job.stage
             session = SessionLocal()
-            session.add(...)
-            session.commit()
-            session.close()
+            session.add(self)
 
     def get_primary_job(self):
         """Get the customer's primary (most recent or active) job"""
-        return Job.query.filter_by(customer_id=self.id).filter(Job.stage != 'Cancelled').order_by(Job.created_at.desc()).first()
+        from .models import Job
+        return session.query(Job).filter(
+            Job.customer_id == self.id,
+            Job.stage != 'Cancelled'
+        ).order_by(Job.created_at.desc()).first()
 
     def save(self):
         if not self.postcode and self.address:
             self.postcode = self.extract_postcode_from_address()
         session = SessionLocal()
-        session.add(...)
-        session.commit()
-        session.close()
-        
-        session = SessionLocal()
-        session.add(...)
-        session.commit()
-        session.close()
+        try:
+            session.add(self)
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
+            
     def to_dict(self, include_projects=False):
         """Convert customer to dictionary with optional project inclusion"""
         data = {

@@ -1,11 +1,8 @@
-from flask import Blueprint, jsonify, request
-# REMOVED: from ..database import db 
+from flask import Blueprint, jsonify, request, current_app
 from ..models import ProductionNotification
 from .auth_helpers import token_required 
 from datetime import datetime
-# 👈 NEW IMPORT: Required for database write operations
-from ..db import SessionLocal 
-
+from ..db import SessionLocal # Required for database write/read operations
 
 notification_bp = Blueprint('notification', __name__)
 
@@ -15,31 +12,37 @@ def get_production_notifications():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
 
-    # Role check removed as requested (Task 2)
+    session = SessionLocal() # 👈 START SESSION FOR READ (FIXED)
+    try:
+        # FIXED: Replace ProductionNotification.query with session.query(ProductionNotification)
+        notifications = session.query(ProductionNotification).filter_by(read=False).order_by(
+            ProductionNotification.created_at.desc()
+        ).all()
 
-    # Note: ProductionNotification.query is used, assuming implicit session handling for reads.
-    notifications = ProductionNotification.query.filter_by(read=False).order_by(ProductionNotification.created_at.desc()).all()
-
-    return jsonify([
-        {
-            'id': n.id,
-            'job_id': n.job_id,
-            'customer_id': n.customer_id,
-            'message': n.message,
-            'created_at': n.created_at.isoformat(),
-            'moved_by': n.moved_by
-        } for n in notifications
-    ])
+        return jsonify([
+            {
+                'id': n.id,
+                'job_id': n.job_id,
+                'customer_id': n.customer_id,
+                'message': n.message,
+                'created_at': n.created_at.isoformat(),
+                'moved_by': n.moved_by
+            } for n in notifications
+        ])
+    except Exception as e:
+        session.rollback()
+        current_app.logger.exception(f"Error fetching production notifications: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close() # 👈 CLOSE SESSION
 
 @notification_bp.route('/notifications/production/<string:notification_id>/read', methods=['PATCH', 'OPTIONS'])
 @token_required
 def mark_as_read(notification_id):
     if request.method == 'OPTIONS':
         return jsonify({}), 200
-
-    # Role check removed as requested (Task 2)
     
-    # Use SessionLocal for the transaction
+    # Use SessionLocal for the transaction (This was already correctly implemented)
     session = SessionLocal() 
     try:
         # Fetch the notification within the current transaction session
@@ -64,19 +67,17 @@ def mark_as_read(notification_id):
 def mark_all_as_read():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
-
-    # Role check removed as requested (Task 2)
     
     session = SessionLocal() # 👈 Start session
     try:
-        # Update all unread notifications in one query using the session
+        # Update all unread notifications in one query using the session (Already correct syntax)
         session.query(ProductionNotification).filter_by(read=False).update(
             {'read': True},
             synchronize_session='fetch'
         )
         
         session.commit() # 👈 Commit transaction
-            
+        
         return jsonify({'message': 'All notifications marked as read'}), 200
     except Exception as e:
         session.rollback() # 👈 Rollback on error
