@@ -10,6 +10,7 @@ from ..models import (
 from .auth_helpers import token_required
 from sqlalchemy.exc import OperationalError
 from sqlalchemy import func
+from sqlalchemy.orm import selectinload
 
 db_bp = Blueprint('database', __name__)
 
@@ -513,26 +514,23 @@ def get_pipeline_data():
         return jsonify({}), 200
     session = SessionLocal()
     try:
-        # FIXED: Uses session.query
-        customers = session.query(Customer).all()
-        # FIXED: Uses session.query
-        jobs = session.query(Job).all()
-        # FIXED: Uses session.query
-        projects = session.query(Project).all()
-        
-        jobs_by_customer = {c.id: [] for c in customers}
-        for job in jobs:
-             jobs_by_customer.setdefault(job.customer_id, []).append(job)
-        
-        projects_by_customer = {c.id: [] for c in customers}
-        for project in projects:
-             projects_by_customer.setdefault(project.customer_id, []).append(project)
+        # 🔑 CRITICAL FIX: Use EAGER LOADING (selectinload) to fetch 
+        # all customers and their related jobs and projects simultaneously.
+        customers = session.query(Customer).options(
+            selectinload(Customer.jobs),
+            selectinload(Customer.projects)
+        ).all()
 
         pipeline_items = []
-        
+
+        # The subsequent Python processing loop remains mostly the same, 
+        # but now it operates on data that is already available in memory, 
+        # making it dramatically faster.
+
         for customer in customers:
-            customer_jobs = jobs_by_customer.get(customer.id, [])
-            customer_projects = projects_by_customer.get(customer.id, [])
+            # Relationships are now eagerly loaded:
+            customer_jobs = customer.jobs 
+            customer_projects = customer.projects 
             has_linked_entity = bool(customer_jobs or customer_projects)
 
             # 1. Generate a card for *every* Job
@@ -586,6 +584,7 @@ def get_pipeline_data():
                         'deposit1': None, 'deposit2': None,
                         'deposit1_paid': False, 'deposit2_paid': False,
                         'delivery_date': None,
+                        # Note: Need to handle the Date/DateTime difference for measure_date
                         'measure_date': getattr(project, 'date_of_measure', None).isoformat() if getattr(project, 'date_of_measure', None) else None,
                         'installation_address': customer.address,
                         'salesperson_name': customer.salesperson,

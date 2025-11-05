@@ -7,6 +7,7 @@ from ..utils.file_utils import allowed_file
 from ..models import DrawingDocument
 from .auth_helpers import token_required 
 from ..db import SessionLocal 
+from sqlalchemy import or_ # Import for clearer query filtering
 
 try:
     from pdf_generator import generate_pdf
@@ -57,7 +58,7 @@ def delete_customer_drawing(drawing_id):
 
     session = SessionLocal() # 👈 Start session
     try:
-        # Find the drawing using the active session
+        # Find the drawing using the active session (Correct Native SQLAlchemy)
         drawing = session.get(DrawingDocument, drawing_id)
         if not drawing:
             return jsonify({'error': 'Drawing not found'}), 404
@@ -263,9 +264,9 @@ def handle_customer_drawings():
         try:
             # Query using the active session instance
             drawings = session.query(DrawingDocument)\
-                            .filter(DrawingDocument.customer_id == customer_id)\
-                            .order_by(DrawingDocument.created_at.desc())\
-                            .all()
+                               .filter(DrawingDocument.customer_id == customer_id)\
+                               .order_by(DrawingDocument.created_at.desc())\
+                               .all()
 
             result = [d.to_dict() for d in drawings]
 
@@ -313,21 +314,18 @@ def handle_customer_drawings():
             else:
                 category = 'other'
             
-            # 🎨 --- FIX FOR 'get_full_name' ERROR ---
+            # --- Safely determine uploaded_by name ---
             uploaded_by = 'System' 
             
-            # Check for the current user object AND the correct property 'full_name'
             if hasattr(request, 'current_user') and request.current_user and hasattr(request.current_user, 'full_name'):
                 try:
-                    # Access the property directly (request.current_user.full_name)
                     uploaded_by = request.current_user.full_name
                 except Exception as user_err:
                     current_app.logger.warning(f"Error accessing user full_name: {user_err}")
-                    # Fallback if property exists but access fails (e.g., missing first_name)
                     if hasattr(request.current_user, 'email'):
                         uploaded_by = request.current_user.email
                     
-            # 🎨 --- END FIX ---
+            # --- END Safely determine uploaded_by name ---
 
             # Create database record
             new_drawing = DrawingDocument(
@@ -373,32 +371,44 @@ def handle_customer_drawings():
 
 
 # ==========================================
-# DRAWING VIEW ROUTE
+# DRAWING VIEW ROUTE (FIXED FOR DB LOOKUP)
 # ==========================================
 
 @file_bp.route('/files/drawings/view/<filename>', methods=['GET'])
 def view_customer_drawing(filename):
-    """Serve the uploaded file for viewing/download"""
+    """
+    Serve the uploaded file for viewing/download.
+    This fix ensures we retrieve the definitive path from the DB.
+    """
     session = SessionLocal() # 👈 START SESSION FOR LOOKUP
     try:
-        drawing_folder = get_drawing_folder()
-        file_location = os.path.join(drawing_folder, filename)
+        
+        # 1. Look up the DrawingDocument record using the unique filename component from the URL.
+        # We query the storage_path or file_url field using the LIKE operator to find the specific record.
+        drawing_record = session.query(DrawingDocument).filter(
+            or_(
+                # Try matching the unique part of the storage path (ends with /unique_filename)
+                DrawingDocument.storage_path.like(f"%{filename}"),
+                # Try matching the file_url (ends with /unique_filename)
+                DrawingDocument.file_url.like(f"%{filename}")
+            )
+        ).first()
 
+        if not drawing_record:
+            current_app.logger.warning(f"DB record not found for URL filename: {filename}")
+            return jsonify({'success': False, 'error': 'File metadata not found in database.'}), 404
+        
+        # 2. Use the database's authoritative path to locate the file on disk
+        file_location = drawing_record.storage_path
+        
         if not os.path.exists(file_location):
-            current_app.logger.warning(f"File not found attempt: {file_location}")
-            
-            # Fallback: try finding it via the database record in case the path logic differs
-            # Use session.query() for database lookup
-            drawing_record = session.query(DrawingDocument).filter(DrawingDocument.file_url.endswith(f'/{filename}')).first()
-            
-            if drawing_record and os.path.exists(drawing_record.storage_path):
-                current_app.logger.info(f"Serving file from DB storage_path: {drawing_record.storage_path}")
-                return send_file(drawing_record.storage_path)
-            else:
-                return jsonify({'success': False, 'error': 'File not found'}), 404
+            current_app.logger.error(f"File found in DB, but missing on disk at: {file_location}")
+            return jsonify({'success': False, 'error': 'File metadata found, but file is missing on the server disk.'}), 404
 
-        current_app.logger.info(f"Serving file directly: {file_location}")
+        current_app.logger.info(f"Serving file from authoritative storage_path: {file_location}")
+        # Use send_file to serve the static file
         return send_file(file_location)
+        
     except Exception as e:
         current_app.logger.error(f"Error serving drawing file {filename}: {e}", exc_info=True)
         return jsonify({'success': False, 'error': f'Download failed: {str(e)}'}), 500

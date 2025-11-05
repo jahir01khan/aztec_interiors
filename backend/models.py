@@ -1002,7 +1002,7 @@ class CustomerFormData(Base):
     
     # FOREIGN KEYS: Links to both Customer and Project
     customer_id = Column(String(36), ForeignKey('customers.id'), nullable=False)
-    project_id = Column(String(36), ForeignKey('projects.id'), nullable=False)  # NEW: Required field
+    project_id = Column(String(36), ForeignKey('projects.id'), nullable=False) # NEW: Required field
     
     form_data = Column(Text, nullable=False)
     token_used = Column(String(64), nullable=True)
@@ -1013,12 +1013,18 @@ class CustomerFormData(Base):
     approved_by = Column(Integer, ForeignKey('users.id'), nullable=True)
     approval_date = Column(DateTime, nullable=True)
     rejection_reason = Column(Text, nullable=True)
-    created_by = Column(Integer, ForeignKey('users.id'), nullable=True)
+    
+    # User who created the submission
+    created_by = Column(Integer, ForeignKey('users.id'), nullable=True) # <-- Keep as is
 
     # relationshipS
     customer = relationship('Customer', back_populates='form_data')
     project = relationship('Project', back_populates='form_submissions')
     
+    # NEW RELATIONSHIPS ADDED FOR CLARITY:
+    approved_by_user = relationship('User', foreign_keys=[approved_by], backref='approved_forms')
+    creator = relationship('User', foreign_keys=[created_by], backref='created_forms') # <-- ADDED
+
     # Notifications relationship with cascade delete
     notifications = relationship(
         'ApprovalNotification',
@@ -1047,7 +1053,8 @@ class CustomerFormData(Base):
             'approval_status': self.approval_status,
             'approved_by': self.approved_by,
             'approval_date': self.approval_date.isoformat() if self.approval_date else None,
-            'rejection_reason': self.rejection_reason
+            'rejection_reason': self.rejection_reason,
+            'created_by': self.created_by
         }
 
 
