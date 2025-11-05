@@ -8,7 +8,7 @@ from sqlalchemy.orm import relationship
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
 
-from backend.db import Base  # ✅ use declarative Base from db.py
+from .db import Base  # ✅ use declarative Base from db.py
 
 # ----------------------------------
 # Helpers / Enums
