@@ -256,7 +256,7 @@ class Customer(Base):
             'phone': self.phone,
             'email': self.email,
             'address': self.address,
-            'postcode': self.postcode,
+            'postcode': self.postcode or '',
             'salesperson': self.salesperson,
             'contact_made': self.contact_made,
             'preferred_contact_method': self.preferred_contact_method,
