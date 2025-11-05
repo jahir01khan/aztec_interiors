@@ -6,7 +6,6 @@ import uuid
 from ..utils.file_utils import allowed_file
 from ..models import DrawingDocument
 from .auth_helpers import token_required 
-# 👈 NEW IMPORT: Required for database write operations
 from ..db import SessionLocal 
 
 try:
@@ -260,11 +259,13 @@ def handle_customer_drawings():
         if not customer_id:
             return jsonify({'error': 'Customer ID query parameter is required'}), 400
 
+        session = SessionLocal() # 👈 START SESSION FOR READ
         try:
-            # Note: This block assumes an implicit session or a global query object is set up for 'DrawingDocument.query'
-            drawings = DrawingDocument.query.filter_by(customer_id=customer_id)\
-                                             .order_by(DrawingDocument.created_at.desc())\
-                                             .all()
+            # Query using the active session instance
+            drawings = session.query(DrawingDocument)\
+                            .filter(DrawingDocument.customer_id == customer_id)\
+                            .order_by(DrawingDocument.created_at.desc())\
+                            .all()
 
             result = [d.to_dict() for d in drawings]
 
@@ -273,6 +274,8 @@ def handle_customer_drawings():
         except Exception as e:
             current_app.logger.error(f"Error fetching drawings for customer {customer_id}: {e}", exc_info=True)
             return jsonify({'error': f'Failed to fetch drawings: {str(e)}'}), 500
+        finally:
+            session.close() # 👈 CLOSE SESSION
 
     # --- Handle POST Request (Write) ---
     elif request.method == 'POST':
@@ -376,14 +379,18 @@ def handle_customer_drawings():
 @file_bp.route('/files/drawings/view/<filename>', methods=['GET'])
 def view_customer_drawing(filename):
     """Serve the uploaded file for viewing/download"""
+    session = SessionLocal() # 👈 START SESSION FOR LOOKUP
     try:
         drawing_folder = get_drawing_folder()
         file_location = os.path.join(drawing_folder, filename)
 
         if not os.path.exists(file_location):
             current_app.logger.warning(f"File not found attempt: {file_location}")
+            
             # Fallback: try finding it via the database record in case the path logic differs
-            drawing_record = DrawingDocument.query.filter(DrawingDocument.file_url.endswith(f'/{filename}')).first()
+            # Use session.query() for database lookup
+            drawing_record = session.query(DrawingDocument).filter(DrawingDocument.file_url.endswith(f'/{filename}')).first()
+            
             if drawing_record and os.path.exists(drawing_record.storage_path):
                 current_app.logger.info(f"Serving file from DB storage_path: {drawing_record.storage_path}")
                 return send_file(drawing_record.storage_path)
@@ -395,3 +402,5 @@ def view_customer_drawing(filename):
     except Exception as e:
         current_app.logger.error(f"Error serving drawing file {filename}: {e}", exc_info=True)
         return jsonify({'success': False, 'error': f'Download failed: {str(e)}'}), 500
+    finally:
+        session.close() # 👈 CLOSE SESSION

@@ -10,7 +10,7 @@ from fpdf import FPDF
 # REMOVED: from ..db import get_db_connection 
 from ..db import SessionLocal # 👈 NEW IMPORT: Required for database write operations
 from functools import wraps
-
+from sqlalchemy.orm import joinedload # Import to simplify query in new route
 
 form_bp = Blueprint("form", __name__)
 
@@ -37,7 +37,7 @@ def token_required(f):
                 token = auth_header.split(" ")[1]
             except IndexError:
                 return jsonify({'error': 'Invalid token format'}), 401
-        
+            
         if not token:
             return jsonify({'error': 'Token is missing'}), 401
         
@@ -70,10 +70,50 @@ def manager_required(f):
     return decorated
 
 # ------------------------------------------------------------------------
+# NEW CUSTOMER ROUTE: Fetch List of Customers for the Dropdown
+# ------------------------------------------------------------------------
+@form_bp.route('/customers', methods=['GET', 'OPTIONS'])
+@token_required
+def get_all_customers():
+    """
+    Retrieves a list of all customers, typically for selection in a dropdown.
+    The frontend calls this endpoint.
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    session = SessionLocal() # Start session for read operation
+    try:
+        # Fetch all customers
+        customers = session.query(Customer).all()
+        
+        # Manually convert to the required simple JSON format for the frontend dropdown
+        customer_list = [
+            {
+                'id': c.id,
+                'name': c.name,
+                # Include necessary fields that the frontend uses for parameters
+                'address': c.address,
+                'phone': c.phone,
+                'email': c.email
+            }
+            for c in customers
+        ]
+
+        return jsonify(customer_list), 200
+
+    except Exception as e:
+        current_app.logger.exception(f"Error fetching all customers: {e}")
+        return jsonify({'error': 'Failed to fetch customer list'}), 500
+    finally:
+        session.close() # Close session
+
+# ------------------------------------------------------------------------
 # PDF GENERATION HELPERS (Using fpdf2)
 # ------------------------------------------------------------------------
 
 class PDF(FPDF):
+# ... (PDF class methods remain the same) ...
     def header(self):
         # ... (PDF header logic remains the same) ...
         logo_path = r"C:\Users\ayaan\Techmynt Solutions\aztec-interior\public\images\logo.png"
@@ -518,7 +558,7 @@ def save_invoice():
         except Exception as e:
             current_app.logger.error(f"Error creating approval notifications: {e}")
             # Continue anyway - invoice was saved even if notifications failed
-        
+            
         session.commit() # 👈 Commit the main transaction (invoice + notifications)
 
         return jsonify({
@@ -726,7 +766,7 @@ def save_receipt():
         except Exception as e:
             current_app.logger.error(f"Error creating approval notifications: {e}")
             # Continue anyway - receipt was saved even if notifications failed
-        
+            
         session.commit() # 👈 Commit the main transaction (receipt + notifications)
 
         return jsonify({
