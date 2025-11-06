@@ -1105,10 +1105,13 @@ def submit_customer_form():
                 customer_id = customer.id
                 current_app.logger.info(f"Created new customer {customer_id} from form submission")
 
-        # --- 3. Save Form Submission ---
+        # --- 3. Save Form Submission ---       
+        project_id_from_data = form_data.get('project_id')
         
         customer_form_data = CustomerFormData(
             customer_id=customer_id,
+            # **PASS THE VALUE (which is likely None in this case)**
+            project_id=project_id_from_data, 
             form_data=json.dumps(form_data),
             token_used=token or '',
             submitted_at=datetime.utcnow()
