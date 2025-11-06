@@ -53,18 +53,24 @@ def token_required(f):
 @customer_bp.route('/customers', methods=['GET', 'OPTIONS'])
 @token_required
 def get_customers():
-    """Get all customers with their project counts"""
+    """Get all customers with their project counts and full fields."""
     if request.method == 'OPTIONS':
         return jsonify({}), 200
-    
+
+    session = SessionLocal()
     try:
-        customers = Customer.query.all()
-        
-        return jsonify([customer.to_dict(include_projects=False) for customer in customers]), 200
-        
+        customers = session.query(Customer).all()  # ✅ Correct ORM session query
+
+        # ✅ Use the full to_dict() method to include postcode, salesperson, project_types, etc.
+        data = [customer.to_dict(include_projects=False) for customer in customers]
+
+        return jsonify(data), 200
+
     except Exception as e:
         current_app.logger.exception(f"Error fetching customers: {e}")
         return jsonify({'error': 'Failed to fetch customers'}), 500
+    finally:
+        session.close()
 
 
 @customer_bp.route('/customers', methods=['POST', 'OPTIONS'])
