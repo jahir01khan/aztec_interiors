@@ -1227,3 +1227,55 @@ def delete_form_submission(submission_id):
         }), 500
     finally:
         session.close() # 👈 Close session
+
+@form_bp.route('/form-submissions/<int:submission_id>', methods=['PUT', 'OPTIONS'])
+@token_required
+def update_form_submission(submission_id):
+    """
+    Update an existing form submission
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+
+    session = SessionLocal()
+    try:
+        data = request.get_json(silent=True) or {}
+        updated_form_data = data.get('formData')
+        
+        if not updated_form_data:
+            return jsonify({'error': 'Missing form data'}), 400
+
+        # Get the form submission
+        submission = session.get(CustomerFormData, submission_id)
+        if not submission:
+            return jsonify({'error': 'Form submission not found'}), 404
+
+        # Check permissions
+        # Allow edit if user is Manager, HR, Production, or the creator
+        user_role = request.current_user.role
+        allowed_roles = ['Manager', 'HR', 'Production']
+        is_creator = submission.created_by == request.current_user.id
+        
+        if user_role not in allowed_roles and not is_creator:
+            return jsonify({'error': 'You do not have permission to edit this form'}), 403
+
+        # Update the form data
+        submission.form_data = json.dumps(updated_form_data)
+        submission.updated_at = datetime.utcnow()
+        
+        session.commit()
+
+        current_app.logger.info(f"Form submission {submission_id} updated by user {request.current_user.id}")
+
+        return jsonify({
+            'success': True,
+            'message': 'Form updated successfully',
+            'form_submission_id': submission.id
+        }), 200
+
+    except Exception as e:
+        session.rollback()
+        current_app.logger.exception(f"Error updating form submission {submission_id}: {e}")
+        return jsonify({'error': f'Failed to update form: {str(e)}'}), 500
+    finally:
+        session.close()

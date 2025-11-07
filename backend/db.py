@@ -29,7 +29,8 @@ SessionLocal = sessionmaker(
     autocommit=False,
     autoflush=False,
     bind=engine,
-    future=True
+    future=True,
+    expire_on_commit=False  # ✅ ADD THIS LINE - Prevents attributes from expiring after commit
 )
 
 # Base class for declarative models

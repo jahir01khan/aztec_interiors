@@ -4,7 +4,7 @@ from datetime import datetime
 import os
 import uuid 
 from ..utils.file_utils import allowed_file
-from ..models import DrawingDocument
+from ..models import DrawingDocument, FormDocument
 from .auth_helpers import token_required 
 from ..db import SessionLocal 
 from sqlalchemy import or_ # Import for clearer query filtering
@@ -40,6 +40,20 @@ def get_drawing_folder():
         os.makedirs(folder, exist_ok=True)
     except OSError as e:
         current_app.logger.error(f"Could not create drawing folder at {folder}: {e}")
+        pass
+    return folder
+
+def get_form_document_folder():
+    """Gets the configured form document upload folder path, ensuring it exists."""
+    folder = current_app.config.get('FORM_DOCUMENT_UPLOAD_FOLDER')
+    if not folder:
+        current_app.logger.warning("FORM_DOCUMENT_UPLOAD_FOLDER not configured, using default 'form_documents'")
+        folder = os.path.join(current_app.root_path, 'form_documents')
+
+    try:
+        os.makedirs(folder, exist_ok=True)
+    except OSError as e:
+        current_app.logger.error(f"Could not create form document folder at {folder}: {e}")
         pass
     return folder
 
@@ -414,3 +428,203 @@ def view_customer_drawing(filename):
         return jsonify({'success': False, 'error': f'Download failed: {str(e)}'}), 500
     finally:
         session.close() # 👈 CLOSE SESSION
+
+@file_bp.route('/files/forms', methods=['GET', 'POST', 'OPTIONS'])
+@token_required
+def handle_form_documents():
+    """
+    GET: Fetch form documents for a customer.
+    POST: Upload a form document (Excel/PDF) and save its metadata.
+    """
+    if request.method == 'OPTIONS':
+        response = jsonify()
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add('Access-Control-Allow-Headers', "Content-Type, Authorization")
+        response.headers.add('Access-Control-Allow-Methods', "GET, POST, OPTIONS")
+        return response
+
+    # --- Handle GET Request (Read-only) ---
+    if request.method == 'GET':
+        customer_id = request.args.get('customer_id')
+        if not customer_id:
+            return jsonify({'error': 'Customer ID query parameter is required'}), 400
+
+        session = SessionLocal()
+        try:
+            # Query using the active session instance
+            form_docs = session.query(FormDocument)\
+                               .filter(FormDocument.customer_id == customer_id)\
+                               .order_by(FormDocument.created_at.desc())\
+                               .all()
+
+            result = [d.to_dict() for d in form_docs]
+            return jsonify(result), 200
+
+        except Exception as e:
+            current_app.logger.error(f"Error fetching form documents for customer {customer_id}: {e}", exc_info=True)
+            return jsonify({'error': f'Failed to fetch form documents: {str(e)}'}), 500
+        finally:
+            session.close()
+
+    # --- Handle POST Request (Write) ---
+    elif request.method == 'POST':
+        session = SessionLocal()
+        file_path = None
+        try:
+            customer_id = request.form.get('customer_id')
+
+            if not customer_id:
+                return jsonify({'error': 'Customer ID is missing from form data'}), 400
+
+            if 'file' not in request.files:
+                return jsonify({'error': 'No file part in the request'}), 400
+
+            file = request.files['file']
+            if file.filename == '':
+                return jsonify({'error': 'No file selected for upload'}), 400
+
+            # Security and Pathing
+            filename = secure_filename(file.filename)
+            unique_filename = f"{customer_id}_{str(uuid.uuid4())}_{filename}"
+            form_folder = get_form_document_folder()
+            file_path = os.path.join(form_folder, unique_filename)
+
+            # Save the file locally
+            file.save(file_path)
+
+            # Determine file category/type
+            mime_type = file.mimetype
+            file_extension = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+            
+            if 'pdf' in mime_type or file_extension == 'pdf':
+                category = 'pdf'
+            elif file_extension in ['xlsx', 'xls', 'csv'] or 'spreadsheet' in mime_type or 'excel' in mime_type:
+                category = 'excel'
+            else:
+                category = 'other'
+            
+            # Safely determine uploaded_by name
+            uploaded_by = 'System'
+            if hasattr(request, 'current_user') and request.current_user and hasattr(request.current_user, 'full_name'):
+                try:
+                    uploaded_by = request.current_user.full_name
+                except Exception as user_err:
+                    current_app.logger.warning(f"Error accessing user full_name: {user_err}")
+                    if hasattr(request.current_user, 'email'):
+                        uploaded_by = request.current_user.email
+
+            # Create database record
+            new_form_doc = FormDocument(
+                id=str(uuid.uuid4()),
+                customer_id=customer_id,
+                file_name=filename,
+                storage_path=file_path,
+                file_url=f"/files/forms/view/{unique_filename}",
+                mime_type=mime_type,
+                category=category,
+                uploaded_by=uploaded_by
+            )
+
+            session.add(new_form_doc)
+            session.commit()
+
+            current_app.logger.info(f"Form document saved for customer {customer_id}: {filename} at {file_path}")
+
+            form_doc_dict = new_form_doc.to_dict()
+
+            return jsonify({
+                'success': True,
+                'message': 'File uploaded and metadata saved successfully',
+                'form_document': form_doc_dict
+            }), 201
+
+        except Exception as e:
+            session.rollback()
+            current_app.logger.error(f"Error processing form document upload: {str(e)}", exc_info=True)
+            # Clean up file if it was saved to disk but DB commit failed
+            if file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    current_app.logger.info(f"Cleaned up partially uploaded file: {file_path}")
+                except OSError as rm_err:
+                    current_app.logger.error(f"Error cleaning up file {file_path}: {rm_err}")
+            return jsonify({'error': f'Upload failed: {str(e)}'}), 500
+        finally:
+            session.close()
+
+    return jsonify({'error': 'Method Not Allowed'}), 405
+
+
+# Add this route for viewing form documents
+@file_bp.route('/files/forms/view/<filename>', methods=['GET'])
+def view_form_document(filename):
+    """
+    Serve the uploaded form document for viewing/download.
+    """
+    session = SessionLocal()
+    try:
+        # Look up the FormDocument record
+        form_doc = session.query(FormDocument).filter(
+            or_(
+                FormDocument.storage_path.like(f"%{filename}"),
+                FormDocument.file_url.like(f"%{filename}")
+            )
+        ).first()
+
+        if not form_doc:
+            current_app.logger.warning(f"DB record not found for form document: {filename}")
+            return jsonify({'success': False, 'error': 'File metadata not found in database.'}), 404
+        
+        file_location = form_doc.storage_path
+        
+        if not os.path.exists(file_location):
+            current_app.logger.error(f"File found in DB, but missing on disk at: {file_location}")
+            return jsonify({'success': False, 'error': 'File metadata found, but file is missing on the server disk.'}), 404
+
+        current_app.logger.info(f"Serving form document from: {file_location}")
+        return send_file(file_location)
+        
+    except Exception as e:
+        current_app.logger.error(f"Error serving form document {filename}: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': f'Download failed: {str(e)}'}), 500
+    finally:
+        session.close()
+
+
+# Add this route for deleting form documents
+@file_bp.route('/files/forms/<form_doc_id>', methods=['DELETE', 'OPTIONS'])
+@token_required
+def delete_form_document(form_doc_id):
+    if request.method == 'OPTIONS':
+        resp = jsonify()
+        resp.headers.add('Access-Control-Allow-Origin', '*')
+        resp.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        resp.headers.add('Access-Control-Allow-Methods', 'DELETE, OPTIONS')
+        return resp
+
+    session = SessionLocal()
+    try:
+        form_doc = session.get(FormDocument, form_doc_id)
+        if not form_doc:
+            return jsonify({'error': 'Form document not found'}), 404
+
+        # Delete file from disk
+        if form_doc.storage_path and os.path.exists(form_doc.storage_path):
+            try:
+                os.remove(form_doc.storage_path)
+                current_app.logger.info(f"Deleted file: {form_doc.storage_path}")
+            except Exception as e:
+                current_app.logger.warning(f"Could not delete file {form_doc.storage_path}: {e}")
+
+        # Delete DB record
+        session.delete(form_doc)
+        session.commit()
+
+        return jsonify({'success': True, 'message': 'Form document deleted successfully'}), 200
+
+    except Exception as e:
+        session.rollback()
+        current_app.logger.error(f"Error deleting form document {form_doc_id}: {e}", exc_info=True)
+        return jsonify({'error': f'Failed to delete. Server error: {str(e)}'}), 500
+    finally:
+        session.close()

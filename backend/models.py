@@ -269,21 +269,36 @@ class Customer(Base):
             
     def to_dict(self, include_projects=False):
         """Convert customer to dictionary with optional project inclusion"""
+        
+        # ✅ Handle JSON column properly
+        project_types_value = self.project_types
+        if project_types_value is None:
+            project_types_value = []
+        elif isinstance(project_types_value, str):
+            # If it's stored as a JSON string, parse it
+            import json
+            try:
+                project_types_value = json.loads(project_types_value)
+            except:
+                project_types_value = []
+        elif not isinstance(project_types_value, list):
+            project_types_value = []
+        
         data = {
             'id': self.id,
             'name': self.name,
-            'phone': self.phone,
-            'email': self.email,
-            'address': self.address,
-            'postcode': self.postcode or '',
-            'salesperson': self.salesperson or '',
-            'contact_made': self.contact_made,
-            'preferred_contact_method': self.preferred_contact_method,
-            'marketing_opt_in': self.marketing_opt_in,
-            'notes': self.notes,
-            'stage': self.stage,
-            'status': self.status,
-            'project_types': self.project_types or [],
+            'phone': self.phone or '',
+            'email': self.email or '',
+            'address': self.address or '',
+            'postcode': self.postcode or '',  # ✅ This should work now
+            'salesperson': self.salesperson or '',  # ✅ Will show empty string for NULL
+            'contact_made': self.contact_made or 'Unknown',
+            'preferred_contact_method': self.preferred_contact_method or 'Phone',
+            'marketing_opt_in': bool(self.marketing_opt_in),
+            'notes': self.notes or '',
+            'stage': self.stage or 'Lead',
+            'status': self.status or 'Active',
+            'project_types': project_types_value,  # ✅ Properly serialized
             'date_of_measure': self.date_of_measure.isoformat() if self.date_of_measure else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
@@ -1002,11 +1017,12 @@ class CustomerFormData(Base):
     
     # FOREIGN KEYS: Links to both Customer and Project
     customer_id = Column(String(36), ForeignKey('customers.id'), nullable=False)
-    project_id = Column(String(36), ForeignKey('projects.id'), nullable=False) # NEW: Required field
+    project_id = Column(String(36), ForeignKey('projects.id'), nullable=True)  # Changed to nullable=True
     
     form_data = Column(Text, nullable=False)
     token_used = Column(String(64), nullable=True)
     submitted_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)  # ADD THIS LINE
 
     # Approval fields
     approval_status = Column(String(20), default='pending')
@@ -1015,7 +1031,7 @@ class CustomerFormData(Base):
     rejection_reason = Column(Text, nullable=True)
     
     # User who created the submission
-    created_by = Column(Integer, ForeignKey('users.id'), nullable=True) # <-- Keep as is
+    created_by = Column(Integer, ForeignKey('users.id'), nullable=True)
 
     # relationshipS
     customer = relationship('Customer', back_populates='form_data')
@@ -1023,7 +1039,7 @@ class CustomerFormData(Base):
     
     # NEW RELATIONSHIPS ADDED FOR CLARITY:
     approved_by_user = relationship('User', foreign_keys=[approved_by], backref='approved_forms')
-    creator = relationship('User', foreign_keys=[created_by], backref='created_forms') # <-- ADDED
+    creator = relationship('User', foreign_keys=[created_by], backref='created_forms')
 
     # Notifications relationship with cascade delete
     notifications = relationship(
@@ -1034,7 +1050,7 @@ class CustomerFormData(Base):
     )
 
     def __repr__(self):
-        return f'<CustomerFormData {self.id} for Project {self.project_id}>'
+        return f'<CustomerFormData {self.id} for Customer {self.customer_id}>'
 
     def to_dict(self):
         import json
@@ -1050,6 +1066,7 @@ class CustomerFormData(Base):
             'form_data': parsed_data,
             'token_used': self.token_used,
             'submitted_at': self.submitted_at.isoformat() if self.submitted_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,  # ADD THIS LINE
             'approval_status': self.approval_status,
             'approved_by': self.approved_by,
             'approval_date': self.approval_date.isoformat() if self.approval_date else None,
@@ -1205,4 +1222,37 @@ class Assignment(Base):
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'job_reference': self.job.job_reference if self.job else None,
             'customer_name': self.customer.name if self.customer else None,
+        }
+
+class FormDocument(Base):
+    __tablename__ = 'form_documents'
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    
+    # FOREIGN KEY: Links to Customer
+    customer_id = Column(String(36), ForeignKey('customers.id', ondelete='CASCADE'), nullable=False)
+    
+    # File details
+    file_name = Column(String(255), nullable=False)
+    storage_path = Column(String(500), nullable=False)
+    file_url = Column(String(500), nullable=False)
+    mime_type = Column(String(100))
+    category = Column(String(50), default='form')  # 'excel', 'pdf', 'form'
+    
+    # Audit
+    uploaded_by = Column(String(200))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # relationship
+    customer = relationship('Customer', backref='form_documents')
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'customer_id': self.customer_id,
+            'filename': self.file_name,
+            'url': self.file_url,
+            'type': self.category,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'uploaded_by': self.uploaded_by
         }

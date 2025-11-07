@@ -59,10 +59,23 @@ def get_customers():
 
     session = SessionLocal()
     try:
-        customers = session.query(Customer).all()  # ✅ Correct ORM session query
+        # ✅ Explicitly refresh/expire_on_commit=False to ensure data is loaded
+        customers = session.query(Customer).all()
+        
+        # ✅ DEBUG: Check if data exists before serialization
+        if customers:
+            first = customers[0]
+            current_app.logger.info(f"🔍 Raw customer object:")
+            current_app.logger.info(f"  postcode type: {type(first.postcode)}, value: {repr(first.postcode)}")
+            current_app.logger.info(f"  salesperson type: {type(first.salesperson)}, value: {repr(first.salesperson)}")
+            current_app.logger.info(f"  project_types type: {type(first.project_types)}, value: {repr(first.project_types)}")
 
-        # ✅ Use the full to_dict() method to include postcode, salesperson, project_types, etc.
+        # Serialize to dict BEFORE closing session
         data = [customer.to_dict(include_projects=False) for customer in customers]
+        
+        # ✅ DEBUG: Check serialized data
+        if data:
+            current_app.logger.info(f"🔍 Serialized customer dict: {data[0]}")
 
         return jsonify(data), 200
 
