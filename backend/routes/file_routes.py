@@ -64,12 +64,33 @@ def upload_file_to_cloudinary(file, filename, customer_id, file_type='drawings')
         # Reset file pointer to beginning
         file.seek(0)
         
+        # Determine resource type based on file extension and MIME type
+        file_extension = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+        mime_type = file.mimetype if hasattr(file, 'mimetype') else ''
+        
+        # PDFs, Excel, Word docs, and other documents should be 'raw'
+        # Images should be 'image'
+        if file_extension in ['pdf', 'xlsx', 'xls', 'csv', 'doc', 'docx', 'txt', 'zip'] or \
+           'pdf' in mime_type or \
+           'spreadsheet' in mime_type or \
+           'excel' in mime_type or \
+           'document' in mime_type:
+            resource_type = 'raw'
+        elif file_extension in ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'] or \
+             'image' in mime_type:
+            resource_type = 'image'
+        else:
+            # Default to 'raw' for unknown types
+            resource_type = 'raw'
+        
+        current_app.logger.info(f"Uploading {filename} as resource_type='{resource_type}' (extension: {file_extension}, mime: {mime_type})")
+        
         # Upload to Cloudinary
         upload_result = cloudinary.uploader.upload(
             file,
             folder=folder,
             public_id=filename.rsplit('.', 1)[0],  # Use filename without extension
-            resource_type='auto',  # Auto-detect file type (image, video, raw)
+            resource_type=resource_type,  # Specify the correct resource type
             overwrite=False,
             unique_filename=True
         )
@@ -77,7 +98,7 @@ def upload_file_to_cloudinary(file, filename, customer_id, file_type='drawings')
         cloudinary_url = upload_result['secure_url']
         public_id = upload_result['public_id']
         
-        current_app.logger.info(f"File uploaded to Cloudinary: {public_id}")
+        current_app.logger.info(f"File uploaded to Cloudinary: {public_id} at {cloudinary_url}")
         return cloudinary_url, public_id
         
     except Exception as e:
@@ -87,16 +108,25 @@ def upload_file_to_cloudinary(file, filename, customer_id, file_type='drawings')
 def delete_file_from_cloudinary(public_id):
     """Delete a file from Cloudinary"""
     try:
-        # Determine resource type from public_id
-        # Most files will be 'image' or 'raw' (for PDFs, Excel files)
-        result = cloudinary.uploader.destroy(public_id, resource_type='image')
+        # Try to delete as 'raw' first (PDFs, Excel, etc.)
+        result = cloudinary.uploader.destroy(public_id, resource_type='raw')
         
-        # If image deletion failed, try as raw file
+        # If raw deletion failed, try as image
         if result.get('result') != 'ok':
-            result = cloudinary.uploader.destroy(public_id, resource_type='raw')
+            result = cloudinary.uploader.destroy(public_id, resource_type='image')
         
-        current_app.logger.info(f"File deleted from Cloudinary: {public_id}")
-        return result.get('result') == 'ok'
+        # If still failed, try as video (just in case)
+        if result.get('result') != 'ok':
+            result = cloudinary.uploader.destroy(public_id, resource_type='video')
+        
+        success = result.get('result') == 'ok' or result.get('result') == 'not found'
+        
+        if success:
+            current_app.logger.info(f"File deleted from Cloudinary: {public_id}")
+        else:
+            current_app.logger.warning(f"Could not delete from Cloudinary: {public_id}, result: {result}")
+        
+        return success
         
     except Exception as e:
         current_app.logger.error(f"Error deleting from Cloudinary: {e}", exc_info=True)
