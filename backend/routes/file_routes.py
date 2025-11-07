@@ -1,13 +1,16 @@
-from flask import request, jsonify, send_file, Blueprint, current_app
+from flask import request, jsonify, send_file, Blueprint, current_app, redirect
 from werkzeug.utils import secure_filename
 from datetime import datetime
 import os
 import uuid 
+import cloudinary
+import cloudinary.uploader
+import cloudinary.api
 from ..utils.file_utils import allowed_file
 from ..models import DrawingDocument, FormDocument
 from .auth_helpers import token_required 
 from ..db import SessionLocal 
-from sqlalchemy import or_ # Import for clearer query filtering
+from sqlalchemy import or_
 
 try:
     from pdf_generator import generate_pdf
@@ -26,43 +29,218 @@ file_bp = Blueprint('file_routes', __name__)
 latest_structured_data = {}
 
 # ==========================================
-# Helper Function for Drawing Folder
+# Cloudinary Configuration
+# ==========================================
+
+def configure_cloudinary():
+    """Configure Cloudinary with environment variables"""
+    cloudinary.config(
+        cloud_name=os.environ.get('CLOUDINARY_CLOUD_NAME'),
+        api_key=os.environ.get('CLOUDINARY_API_KEY'),
+        api_secret=os.environ.get('CLOUDINARY_API_SECRET'),
+        secure=True
+    )
+
+# Initialize Cloudinary configuration
+configure_cloudinary()
+
+def upload_file_to_cloudinary(file, filename, customer_id, file_type='drawings'):
+    """
+    Upload file to Cloudinary and return the URL and public_id
+    
+    Args:
+        file: The file object to upload
+        filename: The secure filename
+        customer_id: Customer ID for organizing files
+        file_type: 'drawings' or 'forms'
+    
+    Returns:
+        tuple: (cloudinary_url, public_id)
+    """
+    try:
+        # Create folder structure in Cloudinary
+        folder = f"aztec-interiors/{file_type}/{customer_id}"
+        
+        # Reset file pointer to beginning
+        file.seek(0)
+        
+        # Upload to Cloudinary
+        upload_result = cloudinary.uploader.upload(
+            file,
+            folder=folder,
+            public_id=filename.rsplit('.', 1)[0],  # Use filename without extension
+            resource_type='auto',  # Auto-detect file type (image, video, raw)
+            overwrite=False,
+            unique_filename=True
+        )
+        
+        cloudinary_url = upload_result['secure_url']
+        public_id = upload_result['public_id']
+        
+        current_app.logger.info(f"File uploaded to Cloudinary: {public_id}")
+        return cloudinary_url, public_id
+        
+    except Exception as e:
+        current_app.logger.error(f"Error uploading to Cloudinary: {e}", exc_info=True)
+        raise Exception(f"Failed to upload file to Cloudinary: {str(e)}")
+
+def delete_file_from_cloudinary(public_id):
+    """Delete a file from Cloudinary"""
+    try:
+        # Determine resource type from public_id
+        # Most files will be 'image' or 'raw' (for PDFs, Excel files)
+        result = cloudinary.uploader.destroy(public_id, resource_type='image')
+        
+        # If image deletion failed, try as raw file
+        if result.get('result') != 'ok':
+            result = cloudinary.uploader.destroy(public_id, resource_type='raw')
+        
+        current_app.logger.info(f"File deleted from Cloudinary: {public_id}")
+        return result.get('result') == 'ok'
+        
+    except Exception as e:
+        current_app.logger.error(f"Error deleting from Cloudinary: {e}", exc_info=True)
+        return False
+
+# ==========================================
+# Helper Function for Local Folders (for non-S3 files)
 # ==========================================
 
 def get_drawing_folder():
-    """Gets the configured drawing upload folder path, ensuring it exists."""
+    """Gets the configured drawing upload folder path (for legacy/local storage)"""
     folder = current_app.config.get('DRAWING_UPLOAD_FOLDER')
     if not folder:
-        current_app.logger.warning("DRAWING_UPLOAD_FOLDER not configured, using default 'customer_drawings'")
         folder = os.path.join(current_app.root_path, 'customer_drawings')
-
-    try:
-        os.makedirs(folder, exist_ok=True)
-    except OSError as e:
-        current_app.logger.error(f"Could not create drawing folder at {folder}: {e}")
-        pass
+    os.makedirs(folder, exist_ok=True)
     return folder
 
 def get_form_document_folder():
-    """Gets the configured form document upload folder path, ensuring it exists."""
+    """Gets the configured form document upload folder path (for legacy/local storage)"""
     folder = current_app.config.get('FORM_DOCUMENT_UPLOAD_FOLDER')
     if not folder:
-        current_app.logger.warning("FORM_DOCUMENT_UPLOAD_FOLDER not configured, using default 'form_documents'")
         folder = os.path.join(current_app.root_path, 'form_documents')
-
-    try:
-        os.makedirs(folder, exist_ok=True)
-    except OSError as e:
-        current_app.logger.error(f"Could not create form document folder at {folder}: {e}")
-        pass
+    os.makedirs(folder, exist_ok=True)
     return folder
 
-# -------------------------------------------------
-# DELETE a drawing by ID (supports customer_id + project_id)
-# -------------------------------------------------
+# ==========================================
+# CUSTOMER DRAWINGS ROUTES
+# ==========================================
+
+@file_bp.route('/files/drawings', methods=['GET', 'POST', 'OPTIONS'])
+@token_required
+def handle_customer_drawings():
+    """
+    GET: Fetch drawing documents for a customer.
+    POST: Upload a drawing/layout image or PDF and save its metadata to S3.
+    """
+    if request.method == 'OPTIONS':
+        response = jsonify()
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add('Access-Control-Allow-Headers', "Content-Type, Authorization")
+        response.headers.add('Access-Control-Allow-Methods', "GET, POST, OPTIONS")
+        return response
+
+    # --- Handle GET Request ---
+    if request.method == 'GET':
+        customer_id = request.args.get('customer_id')
+        if not customer_id:
+            return jsonify({'error': 'Customer ID query parameter is required'}), 400
+
+        session = SessionLocal()
+        try:
+            drawings = session.query(DrawingDocument)\
+                               .filter(DrawingDocument.customer_id == customer_id)\
+                               .order_by(DrawingDocument.created_at.desc())\
+                               .all()
+
+            result = [d.to_dict() for d in drawings]
+            return jsonify(result), 200
+
+        except Exception as e:
+            current_app.logger.error(f"Error fetching drawings for customer {customer_id}: {e}", exc_info=True)
+            return jsonify({'error': f'Failed to fetch drawings: {str(e)}'}), 500
+        finally:
+            session.close()
+
+    # --- Handle POST Request ---
+    elif request.method == 'POST':
+        session = SessionLocal()
+        try:
+            customer_id = request.form.get('customer_id')
+            project_id = request.form.get('project_id')
+
+            if not customer_id:
+                return jsonify({'error': 'Customer ID is missing from form data'}), 400
+
+            if 'file' not in request.files:
+                return jsonify({'error': 'No file part in the request'}), 400
+
+            file = request.files['file']
+            if file.filename == '':
+                return jsonify({'error': 'No file selected for upload'}), 400
+
+            # Security
+            filename = secure_filename(file.filename)
+            unique_filename = f"{customer_id}_{str(uuid.uuid4())}_{filename}"
+            
+            # Upload to Cloudinary
+            cloudinary_url, public_id = upload_file_to_cloudinary(file, unique_filename, customer_id, 'drawings')
+            
+            # Determine file category
+            mime_type = file.mimetype
+            if 'image' in mime_type:
+                category = 'image'
+            elif 'pdf' in mime_type:
+                category = 'pdf'
+            else:
+                category = 'other'
+            
+            # Safely determine uploaded_by name
+            uploaded_by = 'System'
+            if hasattr(request, 'current_user') and request.current_user:
+                if hasattr(request.current_user, 'full_name'):
+                    uploaded_by = request.current_user.full_name
+                elif hasattr(request.current_user, 'email'):
+                    uploaded_by = request.current_user.email
+
+            # Create database record
+            new_drawing = DrawingDocument(
+                id=str(uuid.uuid4()),
+                customer_id=customer_id,
+                project_id=project_id if project_id else None,
+                file_name=filename,
+                storage_path=public_id,  # Store Cloudinary public_id instead of local path
+                file_url=cloudinary_url,  # Store Cloudinary URL
+                mime_type=mime_type,
+                category=category,
+                uploaded_by=uploaded_by
+            )
+
+            session.add(new_drawing)
+            session.commit()
+
+            current_app.logger.info(f"Drawing saved for customer {customer_id}: {filename} to Cloudinary")
+
+            return jsonify({
+                'success': True,
+                'message': 'File uploaded and metadata saved successfully',
+                'drawing': new_drawing.to_dict()
+            }), 201
+
+        except Exception as e:
+            session.rollback()
+            current_app.logger.error(f"Error processing drawing upload: {str(e)}", exc_info=True)
+            return jsonify({'error': f'Upload failed: {str(e)}'}), 500
+        finally:
+            session.close()
+
+    return jsonify({'error': 'Method Not Allowed'}), 405
+
+
 @file_bp.route('/files/drawings/<drawing_id>', methods=['DELETE', 'OPTIONS'])
 @token_required
 def delete_customer_drawing(drawing_id):
+    """Delete a drawing from both Cloudinary and database"""
     if request.method == 'OPTIONS':
         resp = jsonify()
         resp.headers.add('Access-Control-Allow-Origin', '*')
@@ -70,38 +248,235 @@ def delete_customer_drawing(drawing_id):
         resp.headers.add('Access-Control-Allow-Methods', 'DELETE, OPTIONS')
         return resp
 
-    session = SessionLocal() # 👈 Start session
+    session = SessionLocal()
     try:
-        # Find the drawing using the active session (Correct Native SQLAlchemy)
         drawing = session.get(DrawingDocument, drawing_id)
         if not drawing:
             return jsonify({'error': 'Drawing not found'}), 404
 
-        # 1. Delete file from disk
-        if drawing.storage_path and os.path.exists(drawing.storage_path):
-            try:
-                os.remove(drawing.storage_path)
-                current_app.logger.info(f"Deleted file: {drawing.storage_path}")
-            except Exception as e:
-                # Log the warning but proceed with DB delete
-                current_app.logger.warning(f"Could not delete file {drawing.storage_path}: {e}")
+        # Delete from Cloudinary
+        if drawing.storage_path:
+            delete_file_from_cloudinary(drawing.storage_path)
 
-        # 2. Delete DB record
+        # Delete from database
         session.delete(drawing)
-        session.commit() # 👈 Commit deletion
+        session.commit()
 
         return jsonify({'success': True, 'message': 'Drawing deleted successfully'}), 200
 
     except Exception as e:
-        session.rollback() # 👈 Rollback on error
+        session.rollback()
         current_app.logger.error(f"Error deleting drawing {drawing_id}: {e}", exc_info=True)
         return jsonify({'error': f'Failed to delete. Server error: {str(e)}'}), 500
     finally:
-        session.close() # 👈 Close session
+        session.close()
+
+
+@file_bp.route('/files/drawings/view/<filename>', methods=['GET'])
+def view_customer_drawing(filename):
+    """Serve the uploaded file via Cloudinary URL"""
+    session = SessionLocal()
+    try:
+        # Look up the drawing record
+        drawing_record = session.query(DrawingDocument).filter(
+            or_(
+                DrawingDocument.storage_path.like(f"%{filename}"),
+                DrawingDocument.file_url.like(f"%{filename}")
+            )
+        ).first()
+
+        if not drawing_record:
+            return jsonify({'error': 'File not found in database'}), 404
+        
+        # Cloudinary URLs are already public and permanent
+        # Just redirect to the stored URL
+        return redirect(drawing_record.file_url)
+        
+    except Exception as e:
+        current_app.logger.error(f"Error serving drawing {filename}: {e}", exc_info=True)
+        return jsonify({'error': f'Failed to retrieve file: {str(e)}'}), 500
+    finally:
+        session.close()
 
 
 # ==========================================
-# EXISTING ROUTES (Unmodified Logic, Adjusted Paths)
+# FORM DOCUMENTS ROUTES
+# ==========================================
+
+@file_bp.route('/files/forms', methods=['GET', 'POST', 'OPTIONS'])
+@token_required
+def handle_form_documents():
+    """
+    GET: Fetch form documents for a customer.
+    POST: Upload a form document (Excel/PDF) and save its metadata to S3.
+    """
+    if request.method == 'OPTIONS':
+        response = jsonify()
+        response.headers.add("Access-Control-Allow-Origin", "*")
+        response.headers.add('Access-Control-Allow-Headers', "Content-Type, Authorization")
+        response.headers.add('Access-Control-Allow-Methods', "GET, POST, OPTIONS")
+        return response
+
+    # --- Handle GET Request ---
+    if request.method == 'GET':
+        customer_id = request.args.get('customer_id')
+        if not customer_id:
+            return jsonify({'error': 'Customer ID query parameter is required'}), 400
+
+        session = SessionLocal()
+        try:
+            form_docs = session.query(FormDocument)\
+                               .filter(FormDocument.customer_id == customer_id)\
+                               .order_by(FormDocument.created_at.desc())\
+                               .all()
+
+            result = [d.to_dict() for d in form_docs]
+            return jsonify(result), 200
+
+        except Exception as e:
+            current_app.logger.error(f"Error fetching form documents for customer {customer_id}: {e}", exc_info=True)
+            return jsonify({'error': f'Failed to fetch form documents: {str(e)}'}), 500
+        finally:
+            session.close()
+
+    # --- Handle POST Request ---
+    elif request.method == 'POST':
+        session = SessionLocal()
+        try:
+            customer_id = request.form.get('customer_id')
+
+            if not customer_id:
+                return jsonify({'error': 'Customer ID is missing from form data'}), 400
+
+            if 'file' not in request.files:
+                return jsonify({'error': 'No file part in the request'}), 400
+
+            file = request.files['file']
+            if file.filename == '':
+                return jsonify({'error': 'No file selected for upload'}), 400
+
+            # Security
+            filename = secure_filename(file.filename)
+            unique_filename = f"{customer_id}_{str(uuid.uuid4())}_{filename}"
+            
+            # Upload to Cloudinary
+            cloudinary_url, public_id = upload_file_to_cloudinary(file, unique_filename, customer_id, 'forms')
+
+            # Determine file category
+            mime_type = file.mimetype
+            file_extension = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+            
+            if 'pdf' in mime_type or file_extension == 'pdf':
+                category = 'pdf'
+            elif file_extension in ['xlsx', 'xls', 'csv'] or 'spreadsheet' in mime_type or 'excel' in mime_type:
+                category = 'excel'
+            else:
+                category = 'other'
+            
+            # Safely determine uploaded_by name
+            uploaded_by = 'System'
+            if hasattr(request, 'current_user') and request.current_user:
+                if hasattr(request.current_user, 'full_name'):
+                    uploaded_by = request.current_user.full_name
+                elif hasattr(request.current_user, 'email'):
+                    uploaded_by = request.current_user.email
+
+            # Create database record
+            new_form_doc = FormDocument(
+                id=str(uuid.uuid4()),
+                customer_id=customer_id,
+                file_name=filename,
+                storage_path=public_id,  # Store Cloudinary public_id
+                file_url=cloudinary_url,  # Store Cloudinary URL
+                mime_type=mime_type,
+                category=category,
+                uploaded_by=uploaded_by
+            )
+
+            session.add(new_form_doc)
+            session.commit()
+
+            current_app.logger.info(f"Form document saved for customer {customer_id}: {filename} to Cloudinary")
+
+            return jsonify({
+                'success': True,
+                'message': 'File uploaded and metadata saved successfully',
+                'form_document': new_form_doc.to_dict()
+            }), 201
+
+        except Exception as e:
+            session.rollback()
+            current_app.logger.error(f"Error processing form document upload: {str(e)}", exc_info=True)
+            return jsonify({'error': f'Upload failed: {str(e)}'}), 500
+        finally:
+            session.close()
+
+    return jsonify({'error': 'Method Not Allowed'}), 405
+
+
+@file_bp.route('/files/forms/view/<filename>', methods=['GET'])
+def view_form_document(filename):
+    """Serve the uploaded form document via Cloudinary URL"""
+    session = SessionLocal()
+    try:
+        form_doc = session.query(FormDocument).filter(
+            or_(
+                FormDocument.storage_path.like(f"%{filename}"),
+                FormDocument.file_url.like(f"%{filename}")
+            )
+        ).first()
+
+        if not form_doc:
+            return jsonify({'error': 'File not found in database'}), 404
+        
+        # Cloudinary URLs are already public and permanent
+        # Just redirect to the stored URL
+        return redirect(form_doc.file_url)
+        
+    except Exception as e:
+        current_app.logger.error(f"Error serving form document {filename}: {e}", exc_info=True)
+        return jsonify({'error': f'Failed to retrieve file: {str(e)}'}), 500
+    finally:
+        session.close()
+
+
+@file_bp.route('/files/forms/<form_doc_id>', methods=['DELETE', 'OPTIONS'])
+@token_required
+def delete_form_document(form_doc_id):
+    """Delete a form document from both Cloudinary and database"""
+    if request.method == 'OPTIONS':
+        resp = jsonify()
+        resp.headers.add('Access-Control-Allow-Origin', '*')
+        resp.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        resp.headers.add('Access-Control-Allow-Methods', 'DELETE, OPTIONS')
+        return resp
+
+    session = SessionLocal()
+    try:
+        form_doc = session.get(FormDocument, form_doc_id)
+        if not form_doc:
+            return jsonify({'error': 'Form document not found'}), 404
+
+        # Delete from Cloudinary
+        if form_doc.storage_path:
+            delete_file_from_cloudinary(form_doc.storage_path)
+
+        # Delete from database
+        session.delete(form_doc)
+        session.commit()
+
+        return jsonify({'success': True, 'message': 'Form document deleted successfully'}), 200
+
+    except Exception as e:
+        session.rollback()
+        current_app.logger.error(f"Error deleting form document {form_doc_id}: {e}", exc_info=True)
+        return jsonify({'error': f'Failed to delete. Server error: {str(e)}'}), 500
+    finally:
+        session.close()
+
+
+# ==========================================
+# LEGACY ROUTES (Keep for backwards compatibility)
 # ==========================================
 
 @file_bp.route('/upload', methods=['POST', 'OPTIONS'])
@@ -121,28 +496,19 @@ def upload_image():
         if file.filename == '':
             return jsonify({'error': 'No file selected'}), 400
         if not allowed_file(file.filename):
-            return jsonify({'error': 'Invalid file type. Please upload an image.'}), 400
+            return jsonify({'error': 'Invalid file type'}), 400
 
         filename = secure_filename(file.filename)
         file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], filename)
         file.save(file_path)
 
-        print(f"Processing file: {filename}")
-        # NOTE: process_image_with_openai_vision is an undefined function here.
-        # Assuming it returns valid structured_data or {'error': ...}
-        structured_data = {'customer_name': 'DemoCustomer', 'data': 'Processed successfully'} # Mock data
-        # structured_data = process_image_with_openai_vision(file_path) 
+        structured_data = {'customer_name': 'DemoCustomer', 'data': 'Processed successfully'}
         
-        if 'error' in structured_data:
-            return jsonify({'success': False, 'error': 'Failed to process image', 'details': structured_data}), 500
-
-        print("Generating PDF...")
         pdf_filename = filename.rsplit('.', 1)[0] + '.pdf'
-        pdf_path = generate_pdf(structured_data, pdf_filename) 
+        pdf_path = generate_pdf(structured_data, pdf_filename)
 
-        print("Generating Excel file...")
         customer_name = structured_data.get('customer_name', 'N/A')
-        excel_path = export_to_excel(structured_data, customer_name) 
+        excel_path = export_to_excel(structured_data, customer_name)
 
         os.remove(file_path)
 
@@ -161,6 +527,7 @@ def upload_image():
         current_app.logger.error(f"Error processing upload: {e}", exc_info=True)
         return jsonify({'error': f'Processing failed: {str(e)}'}), 500
 
+
 @file_bp.route('/generate-pdf', methods=['POST', 'OPTIONS'])
 def generate_pdf_from_form():
     if request.method == 'OPTIONS':
@@ -173,15 +540,14 @@ def generate_pdf_from_form():
     try:
         data = request.json.get('data', {})
         if not data:
-            return jsonify({'success': False, 'error': 'No form data provided'}), 400
+            return jsonify({'error': 'No form data provided'}), 400
 
         customer_name = data.get('customer_name', 'Unknown')
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         clean_name = "".join(c for c in customer_name if c.isalnum() or c in (' ', '-', '_')).rstrip().replace(' ', '_')
-        pdf_filename = f"{clean_name}_{timestamp}.pdf" if customer_name != 'Unknown' else f"bedroom_form_{timestamp}.pdf"
+        pdf_filename = f"{clean_name}_{timestamp}.pdf" if customer_name != 'Unknown' else f"form_{timestamp}.pdf"
 
-        print("Generating PDF from form data...")
-        pdf_path = generate_pdf(data, pdf_filename) 
+        pdf_path = generate_pdf(data, pdf_filename)
 
         global latest_structured_data
         latest_structured_data.update(data)
@@ -193,8 +559,9 @@ def generate_pdf_from_form():
         })
 
     except Exception as e:
-        current_app.logger.error(f"Error generating PDF from form: {e}", exc_info=True)
-        return jsonify({'success': False, 'error': f'PDF generation failed: {str(e)}'}), 500
+        current_app.logger.error(f"Error generating PDF: {e}", exc_info=True)
+        return jsonify({'error': f'PDF generation failed: {str(e)}'}), 500
+
 
 @file_bp.route('/generate-excel', methods=['POST', 'OPTIONS'])
 def generate_excel_from_form():
@@ -208,11 +575,10 @@ def generate_excel_from_form():
     try:
         data = request.json.get('data', {})
         if not data:
-            return jsonify({'success': False, 'error': 'No form data provided'}), 400
+            return jsonify({'error': 'No form data provided'}), 400
 
-        print("Generating Excel from form data...")
         customer_name = data.get('customer_name', 'Unknown')
-        excel_path = export_to_excel(data, customer_name) 
+        excel_path = export_to_excel(data, customer_name)
 
         return jsonify({
             'success': True,
@@ -221,8 +587,9 @@ def generate_excel_from_form():
         })
 
     except Exception as e:
-        current_app.logger.error(f"Error generating Excel from form: {e}", exc_info=True)
-        return jsonify({'success': False, 'error': f'Excel generation failed: {str(e)}'}), 500
+        current_app.logger.error(f"Error generating Excel: {e}", exc_info=True)
+        return jsonify({'error': f'Excel generation failed: {str(e)}'}), 500
+
 
 @file_bp.route('/download/<filename>')
 def download_file(filename):
@@ -230,401 +597,19 @@ def download_file(filename):
         pdf_folder = os.path.join(current_app.root_path, 'generated_pdfs')
         return send_file(os.path.join(pdf_folder, filename), as_attachment=True)
     except FileNotFoundError:
-        current_app.logger.warning(f"PDF file not found: generated_pdfs/{filename}")
-        return jsonify({'success': False, 'error': 'File not found'}), 404
+        return jsonify({'error': 'File not found'}), 404
     except Exception as e:
-        current_app.logger.error(f"Error downloading PDF {filename}: {e}", exc_info=True)
-        return jsonify({'success': False, 'error': f'Download failed: {str(e)}'}), 500
+        current_app.logger.error(f"Error downloading: {e}", exc_info=True)
+        return jsonify({'error': f'Download failed: {str(e)}'}), 500
+
 
 @file_bp.route('/download-excel/<filename>')
 def download_excel_file(filename):
-      # This serves from 'generated_excel/', keep as is relative to app root
     try:
         excel_folder = os.path.join(current_app.root_path, 'generated_excel')
         return send_file(os.path.join(excel_folder, filename), as_attachment=True)
     except FileNotFoundError:
-        current_app.logger.warning(f"Excel file not found: generated_excel/{filename}")
-        return jsonify({'success': False, 'error': 'Excel file not found'}), 404
+        return jsonify({'error': 'File not found'}), 404
     except Exception as e:
-        current_app.logger.error(f"Error downloading Excel {filename}: {e}", exc_info=True)
-        return jsonify({'success': False, 'error': f'Download failed: {str(e)}'}), 500
-
-
-# ==========================================
-# CUSTOMER DRAWINGS ROUTES (UPLOAD & FETCH)
-# ==========================================
-
-@file_bp.route('/files/drawings', methods=['GET', 'POST', 'OPTIONS'])
-@token_required
-def handle_customer_drawings():
-    """
-    GET: Fetch drawing documents for a customer.
-    POST: Upload a drawing/layout image or PDF and save its metadata.
-    """
-    if request.method == 'OPTIONS':
-        response = jsonify()
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add('Access-Control-Allow-Headers', "Content-Type, Authorization")
-        response.headers.add('Access-Control-Allow-Methods', "GET, POST, OPTIONS")
-        return response
-
-    # --- Handle GET Request (Read-only) ---
-    if request.method == 'GET':
-        customer_id = request.args.get('customer_id')
-        if not customer_id:
-            return jsonify({'error': 'Customer ID query parameter is required'}), 400
-
-        session = SessionLocal() # 👈 START SESSION FOR READ
-        try:
-            # Query using the active session instance
-            drawings = session.query(DrawingDocument)\
-                               .filter(DrawingDocument.customer_id == customer_id)\
-                               .order_by(DrawingDocument.created_at.desc())\
-                               .all()
-
-            result = [d.to_dict() for d in drawings]
-
-            return jsonify(result), 200
-
-        except Exception as e:
-            current_app.logger.error(f"Error fetching drawings for customer {customer_id}: {e}", exc_info=True)
-            return jsonify({'error': f'Failed to fetch drawings: {str(e)}'}), 500
-        finally:
-            session.close() # 👈 CLOSE SESSION
-
-    # --- Handle POST Request (Write) ---
-    elif request.method == 'POST':
-        session = SessionLocal() # 👈 Start session
-        file_path = None # Initialize file_path for cleanup in case of error
-        try:
-            customer_id = request.form.get('customer_id')
-            project_id = request.form.get('project_id')
-
-            if not customer_id:
-                return jsonify({'error': 'Customer ID is missing from form data'}), 400
-
-            if 'file' not in request.files:
-                return jsonify({'error': 'No file part in the request'}), 400
-
-            file = request.files['file']
-            if file.filename == '':
-                return jsonify({'error': 'No file selected for upload'}), 400
-
-            # Security and Pathing
-            filename = secure_filename(file.filename)
-            unique_filename = f"{customer_id}_{str(uuid.uuid4())}_{filename}"
-            drawing_folder = get_drawing_folder()
-            file_path = os.path.join(drawing_folder, unique_filename) # Set file_path here
-
-            # Save the file locally
-            file.save(file_path)
-
-            # Determine file category/type
-            mime_type = file.mimetype
-            if 'image' in mime_type:
-                category = 'image'
-            elif 'pdf' in mime_type:
-                category = 'pdf'
-            else:
-                category = 'other'
-            
-            # --- Safely determine uploaded_by name ---
-            uploaded_by = 'System' 
-            
-            if hasattr(request, 'current_user') and request.current_user and hasattr(request.current_user, 'full_name'):
-                try:
-                    uploaded_by = request.current_user.full_name
-                except Exception as user_err:
-                    current_app.logger.warning(f"Error accessing user full_name: {user_err}")
-                    if hasattr(request.current_user, 'email'):
-                        uploaded_by = request.current_user.email
-                    
-            # --- END Safely determine uploaded_by name ---
-
-            # Create database record
-            new_drawing = DrawingDocument(
-                id=str(uuid.uuid4()),
-                customer_id=customer_id,
-                project_id=project_id if project_id else None,
-                file_name=filename,
-                storage_path=file_path, 
-                file_url=f"/files/drawings/view/{unique_filename}", 
-                mime_type=mime_type,
-                category=category,
-                uploaded_by=uploaded_by # Use the safely determined value
-            )
-
-            session.add(new_drawing)
-            session.commit() # 👈 Commit transaction
-
-            current_app.logger.info(f"Drawing saved for customer {customer_id}: {filename} at {file_path}")
-
-            drawing_dict = new_drawing.to_dict()
-
-            return jsonify({
-                'success': True,
-                'message': 'File uploaded and metadata saved successfully',
-                'drawing': drawing_dict
-            }), 201
-
-        except Exception as e:
-            session.rollback() # 👈 Rollback on database error
-            current_app.logger.error(f"Error processing drawing upload: {str(e)}", exc_info=True)
-            # Clean up file if it was saved to disk but DB commit failed
-            if file_path and os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                    current_app.logger.info(f"Cleaned up partially uploaded file: {file_path}")
-                except OSError as rm_err:
-                    current_app.logger.error(f"Error cleaning up file {file_path}: {rm_err}")
-            return jsonify({'error': f'Upload failed: {str(e)}'}), 500
-        finally:
-            session.close() # 👈 Close session
-
-    return jsonify({'error': 'Method Not Allowed'}), 405
-
-
-# ==========================================
-# DRAWING VIEW ROUTE (FIXED FOR DB LOOKUP)
-# ==========================================
-
-@file_bp.route('/files/drawings/view/<filename>', methods=['GET'])
-def view_customer_drawing(filename):
-    """
-    Serve the uploaded file for viewing/download.
-    This fix ensures we retrieve the definitive path from the DB.
-    """
-    session = SessionLocal() # 👈 START SESSION FOR LOOKUP
-    try:
-        
-        # 1. Look up the DrawingDocument record using the unique filename component from the URL.
-        # We query the storage_path or file_url field using the LIKE operator to find the specific record.
-        drawing_record = session.query(DrawingDocument).filter(
-            or_(
-                # Try matching the unique part of the storage path (ends with /unique_filename)
-                DrawingDocument.storage_path.like(f"%{filename}"),
-                # Try matching the file_url (ends with /unique_filename)
-                DrawingDocument.file_url.like(f"%{filename}")
-            )
-        ).first()
-
-        if not drawing_record:
-            current_app.logger.warning(f"DB record not found for URL filename: {filename}")
-            return jsonify({'success': False, 'error': 'File metadata not found in database.'}), 404
-        
-        # 2. Use the database's authoritative path to locate the file on disk
-        file_location = drawing_record.storage_path
-        
-        if not os.path.exists(file_location):
-            current_app.logger.error(f"File found in DB, but missing on disk at: {file_location}")
-            return jsonify({'success': False, 'error': 'File metadata found, but file is missing on the server disk.'}), 404
-
-        current_app.logger.info(f"Serving file from authoritative storage_path: {file_location}")
-        # Use send_file to serve the static file
-        return send_file(file_location)
-        
-    except Exception as e:
-        current_app.logger.error(f"Error serving drawing file {filename}: {e}", exc_info=True)
-        return jsonify({'success': False, 'error': f'Download failed: {str(e)}'}), 500
-    finally:
-        session.close() # 👈 CLOSE SESSION
-
-@file_bp.route('/files/forms', methods=['GET', 'POST', 'OPTIONS'])
-@token_required
-def handle_form_documents():
-    """
-    GET: Fetch form documents for a customer.
-    POST: Upload a form document (Excel/PDF) and save its metadata.
-    """
-    if request.method == 'OPTIONS':
-        response = jsonify()
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add('Access-Control-Allow-Headers', "Content-Type, Authorization")
-        response.headers.add('Access-Control-Allow-Methods', "GET, POST, OPTIONS")
-        return response
-
-    # --- Handle GET Request (Read-only) ---
-    if request.method == 'GET':
-        customer_id = request.args.get('customer_id')
-        if not customer_id:
-            return jsonify({'error': 'Customer ID query parameter is required'}), 400
-
-        session = SessionLocal()
-        try:
-            # Query using the active session instance
-            form_docs = session.query(FormDocument)\
-                               .filter(FormDocument.customer_id == customer_id)\
-                               .order_by(FormDocument.created_at.desc())\
-                               .all()
-
-            result = [d.to_dict() for d in form_docs]
-            return jsonify(result), 200
-
-        except Exception as e:
-            current_app.logger.error(f"Error fetching form documents for customer {customer_id}: {e}", exc_info=True)
-            return jsonify({'error': f'Failed to fetch form documents: {str(e)}'}), 500
-        finally:
-            session.close()
-
-    # --- Handle POST Request (Write) ---
-    elif request.method == 'POST':
-        session = SessionLocal()
-        file_path = None
-        try:
-            customer_id = request.form.get('customer_id')
-
-            if not customer_id:
-                return jsonify({'error': 'Customer ID is missing from form data'}), 400
-
-            if 'file' not in request.files:
-                return jsonify({'error': 'No file part in the request'}), 400
-
-            file = request.files['file']
-            if file.filename == '':
-                return jsonify({'error': 'No file selected for upload'}), 400
-
-            # Security and Pathing
-            filename = secure_filename(file.filename)
-            unique_filename = f"{customer_id}_{str(uuid.uuid4())}_{filename}"
-            form_folder = get_form_document_folder()
-            file_path = os.path.join(form_folder, unique_filename)
-
-            # Save the file locally
-            file.save(file_path)
-
-            # Determine file category/type
-            mime_type = file.mimetype
-            file_extension = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
-            
-            if 'pdf' in mime_type or file_extension == 'pdf':
-                category = 'pdf'
-            elif file_extension in ['xlsx', 'xls', 'csv'] or 'spreadsheet' in mime_type or 'excel' in mime_type:
-                category = 'excel'
-            else:
-                category = 'other'
-            
-            # Safely determine uploaded_by name
-            uploaded_by = 'System'
-            if hasattr(request, 'current_user') and request.current_user and hasattr(request.current_user, 'full_name'):
-                try:
-                    uploaded_by = request.current_user.full_name
-                except Exception as user_err:
-                    current_app.logger.warning(f"Error accessing user full_name: {user_err}")
-                    if hasattr(request.current_user, 'email'):
-                        uploaded_by = request.current_user.email
-
-            # Create database record
-            new_form_doc = FormDocument(
-                id=str(uuid.uuid4()),
-                customer_id=customer_id,
-                file_name=filename,
-                storage_path=file_path,
-                file_url=f"/files/forms/view/{unique_filename}",
-                mime_type=mime_type,
-                category=category,
-                uploaded_by=uploaded_by
-            )
-
-            session.add(new_form_doc)
-            session.commit()
-
-            current_app.logger.info(f"Form document saved for customer {customer_id}: {filename} at {file_path}")
-
-            form_doc_dict = new_form_doc.to_dict()
-
-            return jsonify({
-                'success': True,
-                'message': 'File uploaded and metadata saved successfully',
-                'form_document': form_doc_dict
-            }), 201
-
-        except Exception as e:
-            session.rollback()
-            current_app.logger.error(f"Error processing form document upload: {str(e)}", exc_info=True)
-            # Clean up file if it was saved to disk but DB commit failed
-            if file_path and os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                    current_app.logger.info(f"Cleaned up partially uploaded file: {file_path}")
-                except OSError as rm_err:
-                    current_app.logger.error(f"Error cleaning up file {file_path}: {rm_err}")
-            return jsonify({'error': f'Upload failed: {str(e)}'}), 500
-        finally:
-            session.close()
-
-    return jsonify({'error': 'Method Not Allowed'}), 405
-
-
-# Add this route for viewing form documents
-@file_bp.route('/files/forms/view/<filename>', methods=['GET'])
-def view_form_document(filename):
-    """
-    Serve the uploaded form document for viewing/download.
-    """
-    session = SessionLocal()
-    try:
-        # Look up the FormDocument record
-        form_doc = session.query(FormDocument).filter(
-            or_(
-                FormDocument.storage_path.like(f"%{filename}"),
-                FormDocument.file_url.like(f"%{filename}")
-            )
-        ).first()
-
-        if not form_doc:
-            current_app.logger.warning(f"DB record not found for form document: {filename}")
-            return jsonify({'success': False, 'error': 'File metadata not found in database.'}), 404
-        
-        file_location = form_doc.storage_path
-        
-        if not os.path.exists(file_location):
-            current_app.logger.error(f"File found in DB, but missing on disk at: {file_location}")
-            return jsonify({'success': False, 'error': 'File metadata found, but file is missing on the server disk.'}), 404
-
-        current_app.logger.info(f"Serving form document from: {file_location}")
-        return send_file(file_location)
-        
-    except Exception as e:
-        current_app.logger.error(f"Error serving form document {filename}: {e}", exc_info=True)
-        return jsonify({'success': False, 'error': f'Download failed: {str(e)}'}), 500
-    finally:
-        session.close()
-
-
-# Add this route for deleting form documents
-@file_bp.route('/files/forms/<form_doc_id>', methods=['DELETE', 'OPTIONS'])
-@token_required
-def delete_form_document(form_doc_id):
-    if request.method == 'OPTIONS':
-        resp = jsonify()
-        resp.headers.add('Access-Control-Allow-Origin', '*')
-        resp.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-        resp.headers.add('Access-Control-Allow-Methods', 'DELETE, OPTIONS')
-        return resp
-
-    session = SessionLocal()
-    try:
-        form_doc = session.get(FormDocument, form_doc_id)
-        if not form_doc:
-            return jsonify({'error': 'Form document not found'}), 404
-
-        # Delete file from disk
-        if form_doc.storage_path and os.path.exists(form_doc.storage_path):
-            try:
-                os.remove(form_doc.storage_path)
-                current_app.logger.info(f"Deleted file: {form_doc.storage_path}")
-            except Exception as e:
-                current_app.logger.warning(f"Could not delete file {form_doc.storage_path}: {e}")
-
-        # Delete DB record
-        session.delete(form_doc)
-        session.commit()
-
-        return jsonify({'success': True, 'message': 'Form document deleted successfully'}), 200
-
-    except Exception as e:
-        session.rollback()
-        current_app.logger.error(f"Error deleting form document {form_doc_id}: {e}", exc_info=True)
-        return jsonify({'error': f'Failed to delete. Server error: {str(e)}'}), 500
-    finally:
-        session.close()
+        current_app.logger.error(f"Error downloading: {e}", exc_info=True)
+        return jsonify({'error': f'Download failed: {str(e)}'}), 500
