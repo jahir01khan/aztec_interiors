@@ -9,6 +9,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
 
 from .db import Base, SessionLocal  # ✅ use declarative Base from db.py
+# from db import Base, SessionLocal
+
 
 # ----------------------------------
 # Helpers / Enums

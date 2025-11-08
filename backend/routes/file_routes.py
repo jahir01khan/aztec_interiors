@@ -56,7 +56,7 @@ def upload_file_to_cloudinary(file, filename, customer_id, file_type='drawings')
         file_type: 'drawings' or 'forms'
     
     Returns:
-        tuple: (cloudinary_url, public_id)
+        tuple: (view_url, public_id)
     """
     try:
         # Create folder structure in Cloudinary
@@ -66,27 +66,34 @@ def upload_file_to_cloudinary(file, filename, customer_id, file_type='drawings')
         file.seek(0)
         
         # Determine resource type based on file extension and MIME type
+        # Check both the filename and the original file.filename
         file_extension = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+        original_extension = file.filename.rsplit('.', 1)[-1].lower() if hasattr(file, 'filename') and '.' in file.filename else ''
         mime_type = file.mimetype if hasattr(file, 'mimetype') else ''
+        
+        # Use either extension
+        extension = file_extension or original_extension
+        
+        current_app.logger.info(f"File upload details - filename: {filename}, original: {getattr(file, 'filename', 'N/A')}, extension: {extension}, mime: {mime_type}")
         
         # PDFs, Excel, Word docs, and other documents should be 'raw'
         # Images should be 'image'
-        if file_extension in ['pdf', 'xlsx', 'xls', 'csv', 'doc', 'docx', 'txt', 'zip'] or \
-           'pdf' in mime_type or \
-           'spreadsheet' in mime_type or \
-           'excel' in mime_type or \
-           'document' in mime_type:
+        if extension in ['pdf', 'xlsx', 'xls', 'csv', 'doc', 'docx', 'txt', 'zip'] or \
+           'pdf' in mime_type.lower() or \
+           'spreadsheet' in mime_type.lower() or \
+           'excel' in mime_type.lower() or \
+           'document' in mime_type.lower():
             resource_type = 'raw'
-        elif file_extension in ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'] or \
-             'image' in mime_type:
+        elif extension in ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'] or \
+             'image' in mime_type.lower():
             resource_type = 'image'
         else:
             # Default to 'raw' for unknown types
             resource_type = 'raw'
         
-        current_app.logger.info(f"Uploading {filename} as resource_type='{resource_type}' (extension: {file_extension}, mime: {mime_type})")
+        current_app.logger.info(f"Uploading {filename} as resource_type='{resource_type}' (extension: {extension}, mime: {mime_type})")
         
-        # Upload to Cloudinary with flags for inline display
+        # Upload to Cloudinary
         upload_params = {
             'folder': folder,
             'public_id': filename.rsplit('.', 1)[0],  # Use filename without extension
@@ -95,23 +102,20 @@ def upload_file_to_cloudinary(file, filename, customer_id, file_type='drawings')
             'unique_filename': True
         }
         
-        # For PDFs, set flags to display inline instead of download
-        if file_extension == 'pdf' or 'pdf' in mime_type:
-            upload_params['flags'] = 'attachment:false'
-        
         upload_result = cloudinary.uploader.upload(file, **upload_params)
         
         cloudinary_url = upload_result['secure_url']
         public_id = upload_result['public_id']
         
-        # For PDFs, append fl_attachment to URL to force inline display
-        if file_extension == 'pdf' or 'pdf' in mime_type:
-            # Add transformation to force inline display
-            if '/upload/' in cloudinary_url:
-                cloudinary_url = cloudinary_url.replace('/upload/', '/upload/fl_attachment:false/')
-        
         current_app.logger.info(f"File uploaded to Cloudinary: {public_id} at {cloudinary_url}")
-        return cloudinary_url, public_id
+        
+        # IMPORTANT: For the database, store the backend view URL, not the Cloudinary URL
+        # This ensures all files go through our backend which handles PDFs correctly
+        # We store the Cloudinary URL in storage_path for reference
+        backend_view_url = f"/files/{file_type}/view/{filename}"
+        
+        # Return backend URL (not Cloudinary URL) so it gets stored in file_url
+        return backend_view_url, cloudinary_url  # Return both: backend URL and Cloudinary URL
         
     except Exception as e:
         current_app.logger.error(f"Error uploading to Cloudinary: {e}", exc_info=True)
@@ -255,8 +259,8 @@ def handle_customer_drawings():
             filename = secure_filename(file.filename)
             unique_filename = f"{customer_id}_{str(uuid.uuid4())}_{filename}"
             
-            # Upload to Cloudinary
-            cloudinary_url, public_id = upload_file_to_cloudinary(file, unique_filename, customer_id, 'drawings')
+            # Upload to Cloudinary - returns backend view URL and Cloudinary URL
+            backend_view_url, cloudinary_url = upload_file_to_cloudinary(file, unique_filename, customer_id, 'drawings')
             
             # Determine file category
             mime_type = file.mimetype
@@ -281,8 +285,8 @@ def handle_customer_drawings():
                 customer_id=customer_id,
                 project_id=project_id if project_id else None,
                 file_name=filename,
-                storage_path=public_id,  # Store Cloudinary public_id instead of local path
-                file_url=cloudinary_url,  # Store Cloudinary URL
+                storage_path=cloudinary_url,  # Store actual Cloudinary URL for backend reference
+                file_url=backend_view_url,     # Store backend view URL (what user clicks)
                 mime_type=mime_type,
                 category=category,
                 uploaded_by=uploaded_by
@@ -353,20 +357,24 @@ def view_customer_drawing(filename):
         drawing_record = session.query(DrawingDocument).filter(
             or_(
                 DrawingDocument.storage_path.like(f"%{filename}"),
-                DrawingDocument.file_url.like(f"%{filename}")
+                DrawingDocument.file_url.like(f"%{filename}"),
+                DrawingDocument.file_name.like(f"%{filename}")
             )
         ).first()
 
         if not drawing_record:
             return jsonify({'error': 'File not found in database'}), 404
         
+        # Get the actual Cloudinary URL from storage_path
+        cloudinary_url = drawing_record.storage_path
+        
         # Check if it's a PDF
-        is_pdf = drawing_record.file_url and ('.pdf' in drawing_record.file_url.lower() or 
-                                                drawing_record.mime_type == 'application/pdf')
+        is_pdf = cloudinary_url and ('.pdf' in cloudinary_url.lower() or 
+                                      drawing_record.mime_type == 'application/pdf')
         
         if is_pdf:
             # For PDFs, fetch from Cloudinary and serve with inline disposition
-            response = requests.get(drawing_record.file_url)
+            response = requests.get(cloudinary_url, timeout=30)
             
             if response.status_code == 200:
                 return Response(
@@ -374,14 +382,16 @@ def view_customer_drawing(filename):
                     mimetype='application/pdf',
                     headers={
                         'Content-Disposition': 'inline; filename="' + drawing_record.file_name + '"',
-                        'Content-Type': 'application/pdf'
+                        'Content-Type': 'application/pdf',
+                        'Cache-Control': 'public, max-age=3600'
                     }
                 )
             else:
-                return jsonify({'error': 'Failed to fetch PDF from storage'}), 500
+                current_app.logger.error(f"Failed to fetch PDF from Cloudinary: {response.status_code}")
+                return jsonify({'error': f'Failed to fetch PDF from storage (status: {response.status_code})'}), 500
         else:
-            # For images and other files, just redirect
-            return redirect(drawing_record.file_url)
+            # For images and other files, just redirect to Cloudinary
+            return redirect(cloudinary_url)
         
     except Exception as e:
         current_app.logger.error(f"Error serving drawing {filename}: {e}", exc_info=True)
@@ -450,8 +460,8 @@ def handle_form_documents():
             filename = secure_filename(file.filename)
             unique_filename = f"{customer_id}_{str(uuid.uuid4())}_{filename}"
             
-            # Upload to Cloudinary
-            cloudinary_url, public_id = upload_file_to_cloudinary(file, unique_filename, customer_id, 'forms')
+            # Upload to Cloudinary - returns backend view URL and Cloudinary URL
+            backend_view_url, cloudinary_url = upload_file_to_cloudinary(file, unique_filename, customer_id, 'forms')
 
             # Determine file category
             mime_type = file.mimetype
@@ -477,8 +487,8 @@ def handle_form_documents():
                 id=str(uuid.uuid4()),
                 customer_id=customer_id,
                 file_name=filename,
-                storage_path=public_id,  # Store Cloudinary public_id
-                file_url=cloudinary_url,  # Store Cloudinary URL
+                storage_path=cloudinary_url,  # Store actual Cloudinary URL for backend reference
+                file_url=backend_view_url,     # Store backend view URL (what user clicks)
                 mime_type=mime_type,
                 category=category,
                 uploaded_by=uploaded_by
@@ -513,20 +523,24 @@ def view_form_document(filename):
         form_doc = session.query(FormDocument).filter(
             or_(
                 FormDocument.storage_path.like(f"%{filename}"),
-                FormDocument.file_url.like(f"%{filename}")
+                FormDocument.file_url.like(f"%{filename}"),
+                FormDocument.file_name.like(f"%{filename}")
             )
         ).first()
 
         if not form_doc:
             return jsonify({'error': 'File not found in database'}), 404
         
+        # Get the actual Cloudinary URL from storage_path
+        cloudinary_url = form_doc.storage_path
+        
         # Check if it's a PDF
-        is_pdf = form_doc.file_url and ('.pdf' in form_doc.file_url.lower() or 
-                                         form_doc.mime_type == 'application/pdf')
+        is_pdf = cloudinary_url and ('.pdf' in cloudinary_url.lower() or 
+                                     form_doc.mime_type == 'application/pdf')
         
         if is_pdf:
             # For PDFs, fetch from Cloudinary and serve with inline disposition
-            response = requests.get(form_doc.file_url)
+            response = requests.get(cloudinary_url, timeout=30)
             
             if response.status_code == 200:
                 return Response(
@@ -534,14 +548,16 @@ def view_form_document(filename):
                     mimetype='application/pdf',
                     headers={
                         'Content-Disposition': 'inline; filename="' + form_doc.file_name + '"',
-                        'Content-Type': 'application/pdf'
+                        'Content-Type': 'application/pdf',
+                        'Cache-Control': 'public, max-age=3600'
                     }
                 )
             else:
-                return jsonify({'error': 'Failed to fetch PDF from storage'}), 500
+                current_app.logger.error(f"Failed to fetch PDF from Cloudinary: {response.status_code}")
+                return jsonify({'error': f'Failed to fetch PDF from storage (status: {response.status_code})'}), 500
         else:
-            # For other files, just redirect
-            return redirect(form_doc.file_url)
+            # For other files, just redirect to Cloudinary
+            return redirect(cloudinary_url)
         
     except Exception as e:
         current_app.logger.error(f"Error serving form document {filename}: {e}", exc_info=True)
