@@ -1,8 +1,9 @@
-from flask import request, jsonify, send_file, Blueprint, current_app, redirect
+from flask import request, jsonify, send_file, Blueprint, current_app, redirect, Response
 from werkzeug.utils import secure_filename
 from datetime import datetime
 import os
 import uuid 
+import requests
 import cloudinary
 import cloudinary.uploader
 import cloudinary.api
@@ -146,7 +147,7 @@ def delete_file_from_cloudinary(public_id):
 def fix_pdf_url_for_inline_display(url):
     """
     Convert a Cloudinary PDF URL to display inline instead of download
-    Adds fl_attachment:false transformation parameter
+    Uses proper Cloudinary transformation syntax with fl_attachment flag
     """
     if not url or 'cloudinary' not in url:
         return url
@@ -159,9 +160,17 @@ def fix_pdf_url_for_inline_display(url):
     if 'fl_attachment' in url:
         return url
     
-    # Add the inline display flag
+    # Cloudinary URL structure: 
+    # https://res.cloudinary.com/{cloud_name}/{resource_type}/upload/{transformations}/{version}/{path}
+    
+    # Add the inline display flag using proper transformation syntax
     if '/upload/' in url:
-        url = url.replace('/upload/', '/upload/fl_attachment:false/')
+        # Split the URL at /upload/
+        parts = url.split('/upload/')
+        if len(parts) == 2:
+            # Reconstruct with transformation
+            # Use fl_attachment (not fl_attachment:false) to force inline display
+            url = f"{parts[0]}/upload/fl_attachment/{parts[1]}"
     
     return url
 
@@ -337,7 +346,7 @@ def delete_customer_drawing(drawing_id):
 
 @file_bp.route('/files/drawings/view/<filename>', methods=['GET'])
 def view_customer_drawing(filename):
-    """Serve the uploaded file via Cloudinary URL"""
+    """Serve the uploaded file via Cloudinary URL or fetch and serve with inline headers for PDFs"""
     session = SessionLocal()
     try:
         # Look up the drawing record
@@ -351,12 +360,28 @@ def view_customer_drawing(filename):
         if not drawing_record:
             return jsonify({'error': 'File not found in database'}), 404
         
-        # Fix PDF URLs to display inline instead of download
-        url_to_redirect = fix_pdf_url_for_inline_display(drawing_record.file_url)
+        # Check if it's a PDF
+        is_pdf = drawing_record.file_url and ('.pdf' in drawing_record.file_url.lower() or 
+                                                drawing_record.mime_type == 'application/pdf')
         
-        # Cloudinary URLs are already public and permanent
-        # Just redirect to the stored URL
-        return redirect(url_to_redirect)
+        if is_pdf:
+            # For PDFs, fetch from Cloudinary and serve with inline disposition
+            response = requests.get(drawing_record.file_url)
+            
+            if response.status_code == 200:
+                return Response(
+                    response.content,
+                    mimetype='application/pdf',
+                    headers={
+                        'Content-Disposition': 'inline; filename="' + drawing_record.file_name + '"',
+                        'Content-Type': 'application/pdf'
+                    }
+                )
+            else:
+                return jsonify({'error': 'Failed to fetch PDF from storage'}), 500
+        else:
+            # For images and other files, just redirect
+            return redirect(drawing_record.file_url)
         
     except Exception as e:
         current_app.logger.error(f"Error serving drawing {filename}: {e}", exc_info=True)
@@ -482,7 +507,7 @@ def handle_form_documents():
 
 @file_bp.route('/files/forms/view/<filename>', methods=['GET'])
 def view_form_document(filename):
-    """Serve the uploaded form document via Cloudinary URL"""
+    """Serve the uploaded form document via Cloudinary URL or fetch and serve with inline headers for PDFs"""
     session = SessionLocal()
     try:
         form_doc = session.query(FormDocument).filter(
@@ -495,12 +520,28 @@ def view_form_document(filename):
         if not form_doc:
             return jsonify({'error': 'File not found in database'}), 404
         
-        # Fix PDF URLs to display inline instead of download
-        url_to_redirect = fix_pdf_url_for_inline_display(form_doc.file_url)
+        # Check if it's a PDF
+        is_pdf = form_doc.file_url and ('.pdf' in form_doc.file_url.lower() or 
+                                         form_doc.mime_type == 'application/pdf')
         
-        # Cloudinary URLs are already public and permanent
-        # Just redirect to the stored URL
-        return redirect(url_to_redirect)
+        if is_pdf:
+            # For PDFs, fetch from Cloudinary and serve with inline disposition
+            response = requests.get(form_doc.file_url)
+            
+            if response.status_code == 200:
+                return Response(
+                    response.content,
+                    mimetype='application/pdf',
+                    headers={
+                        'Content-Disposition': 'inline; filename="' + form_doc.file_name + '"',
+                        'Content-Type': 'application/pdf'
+                    }
+                )
+            else:
+                return jsonify({'error': 'Failed to fetch PDF from storage'}), 500
+        else:
+            # For other files, just redirect
+            return redirect(form_doc.file_url)
         
     except Exception as e:
         current_app.logger.error(f"Error serving form document {filename}: {e}", exc_info=True)
