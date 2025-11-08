@@ -85,18 +85,29 @@ def upload_file_to_cloudinary(file, filename, customer_id, file_type='drawings')
         
         current_app.logger.info(f"Uploading {filename} as resource_type='{resource_type}' (extension: {file_extension}, mime: {mime_type})")
         
-        # Upload to Cloudinary
-        upload_result = cloudinary.uploader.upload(
-            file,
-            folder=folder,
-            public_id=filename.rsplit('.', 1)[0],  # Use filename without extension
-            resource_type=resource_type,  # Specify the correct resource type
-            overwrite=False,
-            unique_filename=True
-        )
+        # Upload to Cloudinary with flags for inline display
+        upload_params = {
+            'folder': folder,
+            'public_id': filename.rsplit('.', 1)[0],  # Use filename without extension
+            'resource_type': resource_type,
+            'overwrite': False,
+            'unique_filename': True
+        }
+        
+        # For PDFs, set flags to display inline instead of download
+        if file_extension == 'pdf' or 'pdf' in mime_type:
+            upload_params['flags'] = 'attachment:false'
+        
+        upload_result = cloudinary.uploader.upload(file, **upload_params)
         
         cloudinary_url = upload_result['secure_url']
         public_id = upload_result['public_id']
+        
+        # For PDFs, append fl_attachment to URL to force inline display
+        if file_extension == 'pdf' or 'pdf' in mime_type:
+            # Add transformation to force inline display
+            if '/upload/' in cloudinary_url:
+                cloudinary_url = cloudinary_url.replace('/upload/', '/upload/fl_attachment:false/')
         
         current_app.logger.info(f"File uploaded to Cloudinary: {public_id} at {cloudinary_url}")
         return cloudinary_url, public_id
@@ -131,6 +142,28 @@ def delete_file_from_cloudinary(public_id):
     except Exception as e:
         current_app.logger.error(f"Error deleting from Cloudinary: {e}", exc_info=True)
         return False
+
+def fix_pdf_url_for_inline_display(url):
+    """
+    Convert a Cloudinary PDF URL to display inline instead of download
+    Adds fl_attachment:false transformation parameter
+    """
+    if not url or 'cloudinary' not in url:
+        return url
+    
+    # Check if it's a PDF URL (either has .pdf or is in /raw/ path)
+    if '.pdf' not in url.lower() and '/raw/' not in url:
+        return url
+    
+    # If already has the flag, return as-is
+    if 'fl_attachment' in url:
+        return url
+    
+    # Add the inline display flag
+    if '/upload/' in url:
+        url = url.replace('/upload/', '/upload/fl_attachment:false/')
+    
+    return url
 
 # ==========================================
 # Helper Function for Local Folders (for non-S3 files)
@@ -318,9 +351,12 @@ def view_customer_drawing(filename):
         if not drawing_record:
             return jsonify({'error': 'File not found in database'}), 404
         
+        # Fix PDF URLs to display inline instead of download
+        url_to_redirect = fix_pdf_url_for_inline_display(drawing_record.file_url)
+        
         # Cloudinary URLs are already public and permanent
         # Just redirect to the stored URL
-        return redirect(drawing_record.file_url)
+        return redirect(url_to_redirect)
         
     except Exception as e:
         current_app.logger.error(f"Error serving drawing {filename}: {e}", exc_info=True)
@@ -459,9 +495,12 @@ def view_form_document(filename):
         if not form_doc:
             return jsonify({'error': 'File not found in database'}), 404
         
+        # Fix PDF URLs to display inline instead of download
+        url_to_redirect = fix_pdf_url_for_inline_display(form_doc.file_url)
+        
         # Cloudinary URLs are already public and permanent
         # Just redirect to the stored URL
-        return redirect(form_doc.file_url)
+        return redirect(url_to_redirect)
         
     except Exception as e:
         current_app.logger.error(f"Error serving form document {filename}: {e}", exc_info=True)
