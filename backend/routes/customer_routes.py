@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from ..models import Customer, Project, CustomerFormData, User, Job, DrawingDocument # Removed 'db' from imports
+from ..models import Customer, Project, CustomerFormData, User, Job, DrawingDocument, ProductionNotification
 from functools import wraps
 from flask import current_app
 import uuid
@@ -353,8 +353,23 @@ def create_project(customer_id):
         
         # If the combined count is 1 (meaning only the new project exists), sync customer stage.
         if existing_project_count == 1 and existing_job_count == 0 and new_project.stage:
+            old_customer_stage = customer.stage
             customer.stage = new_project.stage
-            session.commit() # Commit customer stage change
+            
+            # 🔔 CREATE NOTIFICATION IF MOVED TO PRODUCTION
+            if new_project.stage == 'Production' and old_customer_stage != 'Production':
+                notification = ProductionNotification(
+                    id=str(uuid.uuid4()),
+                    customer_id=customer_id,
+                    message=f"New customer '{customer.name}' moved to Production stage",
+                    created_at=datetime.utcnow(),
+                    moved_by=request.current_user.username if hasattr(request.current_user, 'username') else request.current_user.email,
+                    read=False
+                )
+                session.add(notification)
+                current_app.logger.info(f"📢 Production notification created for customer {customer_id}")
+            
+            session.commit() # Commit customer stage change and notification
         
         # --- END CRITICAL FIX 1 ---
         
@@ -447,7 +462,21 @@ def update_project(project_id):
         
         # If the stage changed AND there are NO other entities, sync the customer's overall stage.
         if 'stage' in data and project.stage != old_stage and total_other_linked_entities == 0:
+            old_customer_stage = customer.stage
             customer.stage = project.stage
+            
+            # 🔔 CREATE NOTIFICATION IF MOVED TO PRODUCTION
+            if project.stage == 'Production' and old_customer_stage != 'Production':
+                notification = ProductionNotification(
+                    id=str(uuid.uuid4()),
+                    customer_id=customer.id,
+                    message=f"Customer '{customer.name}' moved to Production stage",
+                    created_at=datetime.utcnow(),
+                    moved_by=request.current_user.username if hasattr(request.current_user, 'username') else request.current_user.email,
+                    read=False
+                )
+                session.add(notification)
+                current_app.logger.info(f"📢 Production notification created for customer {customer.id}")
             
         # --- END CRITICAL FIX 2 ---
         
