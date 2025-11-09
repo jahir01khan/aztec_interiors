@@ -8,8 +8,8 @@ from sqlalchemy.orm import relationship
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
 
-# from .db import Base, SessionLocal  # ✅ use declarative Base from db.py
-from db import Base, SessionLocal
+from .db import Base, SessionLocal  # ✅ use declarative Base from db.py
+# from db import Base, SessionLocal
 
 
 # ----------------------------------
@@ -40,11 +40,8 @@ DOCUMENT_TEMPLATE_TYPE_ENUM = Enum(
 )
 
 PAYMENT_METHOD_ENUM = Enum('BACS', 'Cash', 'Card', 'Other', name='payment_method_enum')
-
 AUDIT_ACTION_ENUM = Enum('create', 'update', 'delete', name='audit_action_enum')
-
 APPROVAL_STATUS_ENUM = Enum('pending', 'approved', 'rejected', name='approval_status_enum')
-
 ASSIGNMENT_TYPE_ENUM = Enum('job', 'off', 'delivery', 'note', name='assignment_type_enum')
 
 # ----------------------------------
