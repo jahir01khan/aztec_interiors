@@ -239,6 +239,7 @@ def process_import_file(app, import_id, file_path, import_type):
 @appliance_bp.route('/products', methods=['GET'])
 def get_products():
     """Get all products with filtering and search"""
+    session = SessionLocal() # NEW: Open session
     try:
         # Query parameters
         search = request.args.get('search', '')
@@ -254,8 +255,8 @@ def get_products():
         page = request.args.get('page', 1, type=int)
         per_page = min(request.args.get('per_page', 50, type=int), 100)
         
-        # Build query
-        query = Product.query
+        # Build query - CHANGED: Use session.query(Product)
+        query = session.query(Product) 
         
         if active_only:
             query = query.filter(Product.active == True)
@@ -311,15 +312,25 @@ def get_products():
     except Exception as e:
         current_app.logger.error(f"Error fetching products: {e}")
         return jsonify({'error': str(e)}), 500
+    finally: # NEW: Ensure session closure
+        session.close()
 
 @appliance_bp.route('/products/<int:product_id>', methods=['GET'])
 def get_product(product_id):
     """Get a specific product by ID"""
+    session = SessionLocal() # NEW: Open session
     try:
-        product = Product.query.get_or_404(product_id)
+        # CHANGED: Use session.get for simple retrieval
+        product = session.get(Product, product_id)
+        if not product:
+            session.close()
+            return jsonify({'error': 'Product not found'}), 404
+            
         return jsonify(serialize_product(product))
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    finally: # NEW: Ensure session closure
+        session.close()
 
 @appliance_bp.route('/products', methods=['POST'])
 def create_product():
@@ -444,10 +455,12 @@ def delete_product(product_id):
 @appliance_bp.route('/brands', methods=['GET'])
 def get_brands():
     """Get all brands"""
+    session = SessionLocal() # NEW: Open session
     try:
         active_only = request.args.get('active_only', 'true').lower() == 'true'
         
-        query = Brand.query
+        # CHANGED: Brand.query -> session.query(Brand)
+        query = session.query(Brand)
         if active_only:
             query = query.filter(Brand.active == True)
         
@@ -463,6 +476,8 @@ def get_brands():
         } for b in brands])
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    finally: # NEW: Ensure session closure
+        session.close()
 
 @appliance_bp.route('/brands', methods=['POST'])
 def create_brand():
@@ -508,10 +523,12 @@ def create_brand():
 @appliance_bp.route('/categories', methods=['GET'])
 def get_categories():
     """Get all appliance categories"""
+    session = SessionLocal() # NEW: Open session
     try:
         active_only = request.args.get('active_only', 'true').lower() == 'true'
         
-        query = ApplianceCategory.query
+        # CHANGED: ApplianceCategory.query -> session.query(ApplianceCategory)
+        query = session.query(ApplianceCategory)
         if active_only:
             query = query.filter(ApplianceCategory.active == True)
         
@@ -526,6 +543,8 @@ def get_categories():
         } for c in categories])
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    finally: # NEW: Ensure session closure
+        session.close()
 
 @appliance_bp.route('/categories', methods=['POST'])
 def create_category():
@@ -569,8 +588,14 @@ def create_category():
 @appliance_bp.route('/products/<int:product_id>/price/<tier>', methods=['GET'])
 def get_product_price_for_tier(product_id, tier):
     """Get product price for specific tier"""
+    session = SessionLocal() # NEW: Open session
     try:
-        product = Product.query.get_or_404(product_id)
+        # CHANGED: Use session.get for simple retrieval
+        product = session.get(Product, product_id)
+        if not product:
+            session.close()
+            return jsonify({'error': 'Product not found'}), 404
+            
         price = product.get_price_for_tier(tier)
         
         return jsonify({
@@ -580,11 +605,14 @@ def get_product_price_for_tier(product_id, tier):
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    finally: # NEW: Ensure session closure
+        session.close()
 
 # Search endpoint with autocomplete
 @appliance_bp.route('/products/search', methods=['GET'])
 def search_products():
     """Search products with autocomplete support"""
+    session = SessionLocal() # NEW: Open session
     try:
         query_text = request.args.get('q', '')
         limit = min(request.args.get('limit', 10, type=int), 50)
@@ -593,7 +621,8 @@ def search_products():
             return jsonify([])
         
         search_filter = f"%{query_text}%"
-        products = Product.query.filter(
+        # CHANGED: Product.query -> session.query(Product)
+        products = session.query(Product).filter(
             Product.active == True
         ).filter(
             or_( # Changed db.or_ to or_
@@ -616,6 +645,8 @@ def search_products():
         } for p in products])
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    finally: # NEW: Ensure session closure
+        session.close()
 
 # Data import endpoints (for bulk import functionality)
 @appliance_bp.route('/import/upload', methods=['POST'])
@@ -683,10 +714,16 @@ def upload_import_file():
 @appliance_bp.route('/import/<int:import_id>/status', methods=['GET'])
 def get_import_status(import_id):
     """Get status of data import"""
+    session = SessionLocal() # NEW: Open session
     try:
         # Using the simplified query syntax for read-only endpoint
-        import_record = DataImport.query.get_or_404(import_id)
+        # CHANGED: DataImport.query.get_or_404(import_id) -> session.get(DataImport, import_id)
+        import_record = session.get(DataImport, import_id)
         
+        if not import_record:
+            session.close()
+            return jsonify({'error': 'Import record not found'}), 404
+            
         return jsonify({
             'id': import_record.id,
             'filename': import_record.filename,
@@ -700,3 +737,5 @@ def get_import_status(import_id):
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    finally: # NEW: Ensure session closure
+        session.close()

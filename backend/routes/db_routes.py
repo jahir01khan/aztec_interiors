@@ -162,8 +162,8 @@ def handle_single_customer(customer_id):
             
             # Assuming this method exists on the model
             if 'address' in data:
-                 customer.postcode = customer.extract_postcode_from_address()
-                 
+                customer.postcode = customer.extract_postcode_from_address()
+                
             session.commit()
             return jsonify({'message': 'Customer updated successfully'})
 
@@ -416,8 +416,8 @@ def handle_single_job(job_id):
             # Re-fetch customer to update stage after job deletion (FIXED: Uses session.query)
             customer = session.query(Customer).filter_by(id=customer_id).first()
             if customer:
-                 # Update customer stage based on remaining jobs/projects if model supports it
-                 pass 
+                # Update customer stage based on remaining jobs/projects if model supports it
+                pass 
             
             return jsonify({'message': 'Job deleted successfully'})
 
@@ -523,10 +523,6 @@ def get_pipeline_data():
 
         pipeline_items = []
 
-        # The subsequent Python processing loop remains mostly the same, 
-        # but now it operates on data that is already available in memory, 
-        # making it dramatically faster.
-
         for customer in customers:
             # Relationships are now eagerly loaded:
             customer_jobs = customer.jobs 
@@ -605,6 +601,144 @@ def get_pipeline_data():
         
     except Exception as e:
         current_app.logger.error(f"Error fetching pipeline: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
+
+
+# ------------------ PROJECTS ROUTES (New) ------------------
+
+@db_bp.route('/projects/<string:project_id>', methods=['GET', 'PUT', 'DELETE', 'OPTIONS'])
+@token_required
+def handle_single_project(project_id):
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
+    session = SessionLocal()
+    try:
+        project = session.query(Project).filter_by(id=project_id).first()
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
+        
+        if request.method == 'GET':
+            return jsonify(project.to_dict())
+
+        elif request.method == 'PUT':
+            data = request.json
+            old_stage = project.stage
+
+            # Update attributes (ensuring 'stage' is included for drag-and-drop fix)
+            project.project_name = data.get('project_name', project.project_name)
+            project.project_type = data.get('project_type', project.project_type)
+            project.stage = data.get('stage', project.stage) # CRITICAL: Update stage here
+            project.notes = data.get('notes', project.notes)
+            project.updated_by = get_current_user_email(data)
+            project.updated_at = datetime.utcnow()
+
+            if 'date_of_measure' in data and data['date_of_measure']:
+                if isinstance(data['date_of_measure'], str):
+                    project.date_of_measure = datetime.strptime(data['date_of_measure'], '%Y-%m-%d').date()
+                elif isinstance(data['date_of_measure'], date):
+                    project.date_of_measure = data['date_of_measure']
+            
+            # Optionally sync customer stage if this is the only linked entity
+            customer = project.customer
+            new_stage = project.stage
+            if customer:
+                # Check for other jobs/projects linked to the customer
+                job_count = session.query(Job).filter_by(customer_id=customer.id).count()
+                # Exclude the current project from the count of linked projects
+                total_linked = job_count + len([p for p in customer.projects if p.id != project.id])
+                
+                if total_linked == 0 and customer.stage != new_stage:
+                    customer.stage = new_stage
+                    customer.updated_at = datetime.utcnow()
+                    note_entry_cust = f"\n[{datetime.utcnow().isoformat()}] Stage synced from {old_stage} to {new_stage} by {project.updated_by}. Reason: Linked project moved."
+                    customer.notes = (customer.notes or '') + note_entry_cust
+                    session.add(customer)
+
+            session.commit()
+            return jsonify({'message': 'Project updated successfully', 'id': project.id, 'new_stage': project.stage})
+
+        elif request.method == 'DELETE':
+            session.delete(project)
+            session.commit()
+            return jsonify({'message': 'Project deleted successfully'})
+
+    except Exception as e:
+        session.rollback()
+        current_app.logger.error(f"Error handling single project {project_id}: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
+
+
+@db_bp.route('/projects/<string:project_id>/stage', methods=['PATCH', 'OPTIONS'])
+@token_required
+def update_project_stage(project_id):
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
+    session = SessionLocal()
+    try:
+        project = session.query(Project).filter_by(id=project_id).first()
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
+
+        data = request.json
+        updated_by_user = get_current_user_email(data)
+        new_stage = data.get('stage')
+        reason = data.get('reason', 'Stage updated via drag and drop')
+        
+        if not new_stage:
+            return jsonify({'error': 'Stage is required'}), 400
+
+        valid_stages = [
+            "Lead", "Survey", "Design", "Quote", "Consultation", "Quoted",
+            "Accepted", "OnHold", "Production", "Delivery", "Installation",
+            "Complete", "Remedial", "Cancelled"
+        ]
+        if new_stage not in valid_stages:
+            return jsonify({'error': 'Invalid stage'}), 400
+
+        old_stage = project.stage
+        if old_stage == new_stage:
+            return jsonify({'message': 'Stage not changed'}), 200
+
+        project.stage = new_stage
+        project.updated_by = updated_by_user
+        project.updated_at = datetime.utcnow()
+        note_entry = f"\n[{datetime.utcnow().isoformat()}] Stage changed from {old_stage} to {new_stage} by {updated_by_user}. Reason: {reason}"
+        project.notes = (project.notes or '') + note_entry
+
+        # Option 1: Sync customer stage (only if this is the only linked entity)
+        customer = project.customer
+        if customer:
+            # Check for other jobs/projects linked to the customer
+            job_count = session.query(Job).filter_by(customer_id=customer.id).count()
+            # Exclude the current project from the count of linked projects
+            total_linked = job_count + len([p for p in customer.projects if p.id != project.id])
+
+            if total_linked == 0 and customer.stage != new_stage:
+                customer.stage = new_stage
+                customer.updated_at = datetime.utcnow()
+                note_entry_cust = f"\n[{datetime.utcnow().isoformat()}] Stage synced from {old_stage} to {new_stage} by {updated_by_user}. Reason: Linked project moved."
+                customer.notes = (customer.notes or '') + note_entry_cust
+                session.add(customer)
+
+        session.add(project)
+        session.commit()
+
+        return jsonify({
+            'message': 'Stage updated successfully',
+            'project_id': project.id,
+            'old_stage': old_stage,
+            'new_stage': new_stage
+        }), 200
+
+    except Exception as e:
+        session.rollback()
+        current_app.logger.error(f"Error updating project stage: {e}")
         return jsonify({'error': str(e)}), 500
     finally:
         session.close()
@@ -690,7 +824,7 @@ def handle_quotations():
             data = request.json
             quotation = Quotation(
                 customer_id=data.get('customer_id'),
-                total_amount=data.get('total_amount', 0),
+                # REMOVED: total_amount=data.get('total_amount', 0), <-- FIX: This was the source of the error
                 created_by=get_current_user_email(data),
                 notes=data.get('notes', '')
             )
@@ -715,44 +849,6 @@ def handle_quotations():
     except Exception as e:
         session.rollback()
         current_app.logger.error(f"Error in /quotations: {e}")
-        return jsonify({'error': str(e)}), 500
-    finally:
-        session.close()
-
-
-# ------------------ PROJECTS ------------------
-
-@db_bp.route('/projects', methods=['GET', 'POST', 'OPTIONS'])
-@token_required
-def handle_projects():
-    if request.method == 'OPTIONS':
-        return jsonify({}), 200
-
-    session = SessionLocal()
-    try:
-        if request.method == 'POST':
-            data = request.json
-            project = Project(
-                # Use project_name to match the frontend state/interface definition
-                # and avoid conflicts if the model uses 'name' for another purpose.
-                project_name=data.get('project_name', data.get('name', '')),
-                customer_id=data.get('customer_id'),
-                project_type=data.get('project_type'), # Assuming project_type is passed in the payload
-                date_of_measure=datetime.strptime(data['date_of_measure'], '%Y-%m-%d').date() if data.get('date_of_measure') else None,
-                stage=data.get('stage', 'Planning'),
-                created_by=get_current_user_email(data),
-                notes=data.get('notes', '')
-            )
-            session.add(project)
-            session.commit()
-            return jsonify({'id': project.id, 'message': 'Project created successfully'}), 201
-
-        # FIXED: Uses session.query
-        projects = session.query(Project).order_by(Project.created_at.desc()).all()
-        return jsonify([p.to_dict() for p in projects])
-    except Exception as e:
-        session.rollback()
-        current_app.logger.error(f"Error in /projects: {e}")
         return jsonify({'error': str(e)}), 500
     finally:
         session.close()
