@@ -238,6 +238,11 @@ def update_customer_stage(customer_id):
 
         session.add(customer)
         session.commit()
+        
+        # CRITICAL FIX: Refresh the object to ensure the latest state is captured 
+        # before the function returns (prevents stale data read).
+        session.refresh(customer) 
+        
         return jsonify({
             'message': 'Stage updated successfully',
             'customer_id': customer.id,
@@ -489,6 +494,10 @@ def update_job_stage(job_id):
 
         session.add(job)
         session.commit()
+        
+        # CRITICAL FIX: Refresh the object to ensure the latest state is captured 
+        # before the function returns (prevents stale data read).
+        session.refresh(job) 
 
         return jsonify({
             'message': 'Stage updated successfully',
@@ -606,7 +615,7 @@ def get_pipeline_data():
         session.close()
 
 
-# ------------------ PROJECTS ROUTES (New) ------------------
+# ------------------ PROJECTS ROUTES (New/Updated) ------------------
 
 @db_bp.route('/projects/<string:project_id>', methods=['GET', 'PUT', 'DELETE', 'OPTIONS'])
 @token_required
@@ -658,6 +667,11 @@ def handle_single_project(project_id):
                     session.add(customer)
 
             session.commit()
+            
+            # CRITICAL FIX: Refresh the object to ensure the latest state is captured 
+            # before the function returns (prevents stale data read).
+            session.refresh(project)
+            
             return jsonify({'message': 'Project updated successfully', 'id': project.id, 'new_stage': project.stage})
 
         elif request.method == 'DELETE':
@@ -728,6 +742,10 @@ def update_project_stage(project_id):
 
         session.add(project)
         session.commit()
+        
+        # CRITICAL FIX: Refresh the object to ensure the latest state is captured 
+        # before the function returns (prevents stale data read).
+        session.refresh(project)
 
         return jsonify({
             'message': 'Stage updated successfully',
