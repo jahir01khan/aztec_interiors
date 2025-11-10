@@ -53,7 +53,7 @@ class User(Base):
 
     id = Column(Integer, primary_key=True)
     email = Column(String(120), unique=True, nullable=False, index=True)
-    password_hash = Column(String(255), nullable=False)
+    password_hash = Column(String(255), nullable=True)
     first_name = Column(String(50), nullable=False)
     last_name = Column(String(50), nullable=False)
     phone = Column(String(20))
@@ -78,6 +78,8 @@ class User(Base):
         self.password_hash = generate_password_hash(password)
 
     def check_password(self, password: str) -> bool:
+        if not self.password_hash:  # ✅ Check if password exists
+            return False
         return check_password_hash(self.password_hash, password)
 
     @property
@@ -147,6 +149,7 @@ class User(Base):
             'is_active': self.is_active,
             'is_invited': self.is_invited if hasattr(self, 'is_invited') else False,
             'invitation_token': self.invitation_token if hasattr(self, 'is_invited') and self.is_invited else None,
+            'invited_at': self.invited_at.isoformat() if hasattr(self, 'invited_at') and self.invited_at else None,
             'is_verified': self.is_verified,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'last_login': self.last_login.isoformat() if self.last_login else None,

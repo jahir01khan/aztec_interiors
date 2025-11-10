@@ -11,11 +11,6 @@ from ..db import SessionLocal # 👈 SessionLocal is required for all native que
 
 auth_bp = Blueprint('auth', __name__)
 
-# ============================================
-# 🔧 TEMPORARY DEV MODE (REMOVE IN PRODUCTION)
-# ============================================
-DEV_MODE = os.getenv('DEV_MODE', 'true').lower() == 'true' # Set to 'false' in production
-
 # --- Configuration and Helpers ---
 
 def get_client_ip():
@@ -32,11 +27,6 @@ def validate_email(email):
 
 def validate_password(password):
     """Validate password strength"""
-    # ⚠️ RELAXED FOR DEV MODE
-    if DEV_MODE and len(password) >= 4:
-        return True, "Password is valid (dev mode)"
-    
-    # Production validation
     if len(password) < 8:
         return False, "Password must be at least 8 characters long"
     if not re.search(r'[A-Z]', password):
@@ -48,16 +38,11 @@ def validate_password(password):
     return True, "Password is valid"
 
 def check_rate_limit(email, max_attempts=5, window_minutes=15):
-    """Check if user has exceeded login attempts (FIXED QUERY)"""
-    # ⚠️ DISABLED IN DEV MODE
-    if DEV_MODE:
-        return True
-    
-    session = SessionLocal() # Start local session for read-only query
+    """Check if user has exceeded login attempts"""
+    session = SessionLocal()
     try:
         cutoff_time = datetime.utcnow() - timedelta(minutes=window_minutes)
         
-        # FIXED: Use session.query(Model) instead of Model.query
         recent_attempts = session.query(LoginAttempt).filter(
             LoginAttempt.email == email,
             LoginAttempt.attempted_at > cutoff_time,
@@ -66,14 +51,14 @@ def check_rate_limit(email, max_attempts=5, window_minutes=15):
         
         return recent_attempts < max_attempts
     except Exception as e:
-        print(f"Warning: Could not check rate limit: {e}")
-        return True # Default to allowing login if rate limit check fails
+        current_app.logger.warning(f"Could not check rate limit: {e}")
+        return True
     finally:
         session.close()
 
 
 def log_login_attempt(email, ip_address, success):
-    """Log login attempt (must manage its own session)"""
+    """Log login attempt"""
     session = SessionLocal()
     try:
         attempt = LoginAttempt(
@@ -85,83 +70,19 @@ def log_login_attempt(email, ip_address, success):
         session.commit()
     except Exception as e:
         session.rollback()
-        print(f"Warning: Could not log login attempt: {e}")
+        current_app.logger.warning(f"Could not log login attempt: {e}")
     finally:
         session.close()
 
 # --- Decorators ---
 
 def token_required(f):
-    """Decorator to require valid JWT token (FIXED QUERIES)"""
+    """Decorator to require valid JWT token"""
     @wraps(f)
     def decorated(*args, **kwargs):
-        
-        # NOTE: Session is needed inside the decorator because it accesses the DB models (User, Session)
         local_session = SessionLocal()
         
         try:
-            # ⚠️ DEV MODE: Accept any token or no token
-            if DEV_MODE:
-                token = None
-                if 'Authorization' in request.headers:
-                    try:
-                        token = request.headers['Authorization'].split(" ")[1]
-                        
-                        if token == 'mock-jwt-token-123':
-                            # Mock user for testing
-                            # FIXED: Use session.query(User)
-                            mock_user = local_session.query(User).first() 
-                            
-                            if mock_user:
-                                g.user = mock_user
-                            else:
-                                # Create a mock user object if no users exist
-                                g.user = type('User', (), {
-                                    'id': 1,
-                                    'email': 'dev@test.com',
-                                    'first_name': 'Dev',
-                                    'last_name': 'User',
-                                    'role': 'Manager',
-                                    'is_active': True,
-                                    'to_dict': lambda: {
-                                        'id': 1,
-                                        'email': 'dev@test.com',
-                                        'first_name': 'Dev',
-                                        'last_name': 'User',
-                                        'role': 'Manager'
-                                    }
-                                })()
-                            return f(*args, **kwargs)
-                    except:
-                        pass
-                
-                # If no valid token, try to get first user from DB
-                # FIXED: Use session.query(User)
-                user = local_session.query(User).first()
-                
-                if user:
-                    g.user = user
-                    return f(*args, **kwargs)
-                
-                # Last resort: create mock user
-                g.user = type('User', (), {
-                    'id': 1,
-                    'email': 'dev@test.com',
-                    'first_name': 'Dev',
-                    'last_name': 'User',
-                    'role': 'Manager',
-                    'is_active': True,
-                    'to_dict': lambda: {
-                        'id': 1,
-                        'email': 'dev@test.com',
-                        'first_name': 'Dev',
-                        'last_name': 'User',
-                        'role': 'Manager'
-                    }
-                })()
-                return f(*args, **kwargs)
-            
-            # PRODUCTION MODE: Full JWT validation
             token = None
             if 'Authorization' in request.headers:
                 try:
@@ -175,14 +96,15 @@ def token_required(f):
             try:
                 payload = jwt.decode(token, current_app.config['SECRET_KEY'], algorithms=['HS256'])
                 
-                # FIXED: Use session.get() or query(User)
-                user = local_session.get(User, payload['user_id']) 
+                user = local_session.get(User, payload['user_id'])
                 
                 if not user or not user.is_active:
                     return jsonify({'error': 'User not found or inactive'}), 401
 
-                # FIXED: Use session.query(Session)
-                session_record = local_session.query(Session).filter_by(session_token=token, user_id=user.id).first()
+                session_record = local_session.query(Session).filter_by(
+                    session_token=token, 
+                    user_id=user.id
+                ).first()
                 
                 if not session_record or session_record.expires_at < datetime.utcnow():
                     return jsonify({'error': 'Token expired'}), 401
@@ -197,22 +119,17 @@ def token_required(f):
             return f(*args, **kwargs)
             
         finally:
-            local_session.close() # Close the session created for the decorator's work
+            local_session.close()
             
     return decorated
 
 def admin_required(f):
-    """Decorator to require high-level access"""
+    """Decorator to require Manager or HR access"""
     @wraps(f)
     @token_required
     def decorated(*args, **kwargs):
-        # ⚠️ DEV MODE: Allow all
-        if DEV_MODE:
-            return f(*args, **kwargs)
-        
-        # PRODUCTION MODE: Check roles
-        ADMIN_ROLES = ['Manager', 'HR'] 
-        if g.user.role not in ADMIN_ROLES:
+        ADMIN_ROLES = ['Manager', 'HR']
+        if not hasattr(g.user, 'role') or g.user.role not in ADMIN_ROLES:
             return jsonify({'error': 'Manager or HR access required'}), 403
         return f(*args, **kwargs)
     return decorated
@@ -221,11 +138,9 @@ def admin_required(f):
 
 @auth_bp.route('/health', methods=['GET'])
 def health_check():
-    mode = "🔧 DEV MODE (No Auth)" if DEV_MODE else "🔒 PRODUCTION MODE (Full Auth)"
     return {
         'status': 'ok', 
-        'message': 'Backend is running successfully!',
-        'mode': mode
+        'message': 'Backend is running successfully!'
     }, 200
 
 @auth_bp.route('/auth/register', methods=['POST'])
@@ -240,8 +155,6 @@ def register():
         
         if invitation_token:
             # INVITATION COMPLETION FLOW
-            print(f"🔗 Processing invitation registration with token")
-            
             # Find user by invitation token
             user = session.query(User).filter_by(invitation_token=invitation_token).first()
             
@@ -288,7 +201,7 @@ def register():
             
             log_login_attempt(user.email, get_client_ip(), True)
             
-            print(f"✅ Invitation registration completed: {user.email} as {user.role}")
+            current_app.logger.info(f"✅ Invitation registration completed: {user.email} as {user.role}")
             
             return jsonify({
                 'success': True,
@@ -336,7 +249,8 @@ def register():
         )
         user.set_password(password)
         
-        if not DEV_MODE:
+        # Generate verification token for email verification if needed
+        if hasattr(user, 'generate_verification_token'):
             user.generate_verification_token()
 
         session.add(user)
@@ -344,7 +258,7 @@ def register():
 
         log_login_attempt(email, get_client_ip(), True)
         
-        print(f"✅ User registered: {email} as {role}")
+        current_app.logger.info(f"✅ User registered: {email} as {role}")
 
         return jsonify({
             'success': True,
@@ -354,7 +268,7 @@ def register():
 
     except Exception as e:
         session.rollback()  # 👈 Rollback on error
-        print(f"❌ Registration error: {e}")
+        current_app.logger.error(f"❌ Registration error: {e}")
         return jsonify({'error': str(e)}), 500
     finally:
         session.close()  # 👈 Close session
@@ -378,7 +292,7 @@ def login():
 
         if not user or not user.check_password(data['password']):
             log_login_attempt(email, ip, False)
-            print(f"❌ Login failed for: {email}")
+            current_app.logger.warning(f"❌ Login failed for: {email}")
             return jsonify({'error': 'Invalid email or password'}), 401
 
         if not user.is_active:
@@ -409,7 +323,7 @@ def login():
 
         log_login_attempt(email, ip, True)
         
-        print(f"✅ Login successful: {email}")
+        current_app.logger.info(f"✅ Login successful: {email}")
 
         return jsonify({
             'success': True,
@@ -419,7 +333,7 @@ def login():
         }), 200
     except Exception as e:
         session.rollback() # 👈 Rollback on error
-        print(f"❌ Login error: {e}")
+        current_app.logger.error(f"❌ Login error: {e}")
         return jsonify({'error': str(e)}), 500
     finally:
         session.close() # 👈 Close session
@@ -553,7 +467,7 @@ def forgot_password():
             reset_token = user.generate_reset_token() # Updates user object
             session.add(user)
             session.commit() # 👈 Commit token save
-            print(f"Password reset token for {email}: {reset_token}")
+            current_app.logger.info(f"Password reset token for {email}: {reset_token}")
         
         return jsonify({
             'message': 'If the email exists, a password reset link has been sent.'
@@ -678,8 +592,14 @@ def toggle_user_status(user_id):
         user = session.get(User, user_id)
         if not user:
             return jsonify({'error': 'User not found'}), 404
+        
+        # Get the new status from request body if provided
+        data = request.get_json() or {}
+        if 'is_active' in data:
+            user.is_active = data['is_active']
+        else:
+            user.is_active = not user.is_active
             
-        user.is_active = not user.is_active
         user.updated_at = datetime.utcnow()
         
         session.commit() # 👈 Commit status toggle
@@ -747,7 +667,7 @@ def invite_user():
         session.add(new_user)
         session.commit()  # 👈 Commit user creation
         
-        print(f"✅ Invitation created for: {email} as {role}")
+        current_app.logger.info(f"✅ Invitation created for: {email} as {role}")
         
         return jsonify({
             'success': True,
@@ -758,7 +678,7 @@ def invite_user():
         
     except Exception as e:
         session.rollback()  # 👈 Rollback on error
-        print(f"❌ Invitation creation error: {e}")
+        current_app.logger.error(f"❌ Invitation creation error: {e}")
         return jsonify({'error': str(e)}), 500
     finally:
         session.close()  # 👈 Close session
@@ -783,7 +703,7 @@ def resend_invitation(user_id):
         
         session.commit()  # 👈 Commit token update
         
-        print(f"✅ Invitation resent for: {user.email}")
+        current_app.logger.info(f"✅ Invitation resent for: {user.email}")
         
         return jsonify({
             'success': True,
@@ -793,7 +713,7 @@ def resend_invitation(user_id):
         
     except Exception as e:
         session.rollback()  # 👈 Rollback on error
-        print(f"❌ Resend invitation error: {e}")
+        current_app.logger.error(f"❌ Resend invitation error: {e}")
         return jsonify({'error': str(e)}), 500
     finally:
         session.close()  # 👈 Close session
@@ -841,7 +761,7 @@ def update_user(user_id):
         
         session.commit()  # 👈 Commit user updates
         
-        print(f"✅ User updated: {user.email}")
+        current_app.logger.info(f"✅ User updated: {user.email}")
         
         return jsonify({
             'success': True,
@@ -851,7 +771,7 @@ def update_user(user_id):
         
     except Exception as e:
         session.rollback()  # 👈 Rollback on error
-        print(f"❌ Update user error: {e}")
+        current_app.logger.error(f"❌ Update user error: {e}")
         return jsonify({'error': str(e)}), 500
     finally:
         session.close()  # 👈 Close session
@@ -877,7 +797,7 @@ def delete_user(user_id):
         session.delete(user)
         session.commit()  # 👈 Commit deletion
         
-        print(f"✅ User deleted: {email}")
+        current_app.logger.info(f"✅ User deleted: {email}")
         
         return jsonify({
             'success': True,
@@ -886,7 +806,7 @@ def delete_user(user_id):
         
     except Exception as e:
         session.rollback()  # 👈 Rollback on error
-        print(f"❌ Delete user error: {e}")
+        current_app.logger.error(f"❌ Delete user error: {e}")
         return jsonify({'error': str(e)}), 500
     finally:
         session.close()  # 👈 Close session
@@ -903,7 +823,7 @@ def update_company_settings():
         # For now, just return success since you don't have a company settings table yet
         # TODO: Implement actual company settings storage in database
         
-        print(f"✅ Company settings update requested: {data}")
+        current_app.logger.info(f"✅ Company settings update requested: {data}")
         
         return jsonify({
             'success': True,
@@ -912,7 +832,7 @@ def update_company_settings():
         
     except Exception as e:
         session.rollback()  # 👈 Rollback on error
-        print(f"❌ Company settings update error: {e}")
+        current_app.logger.error(f"❌ Company settings update error: {e}")
         return jsonify({'error': str(e)}), 500
     finally:
         session.close()  # 👈 Close session
