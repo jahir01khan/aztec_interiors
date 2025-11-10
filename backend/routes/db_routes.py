@@ -189,6 +189,9 @@ def update_customer_stage(customer_id):
         return jsonify({}), 200
     session = SessionLocal()
     try:
+        from sqlalchemy import text
+        session.execute(text("SET LOCAL statement_timeout = '5000';"))
+        
         # FIXED: Uses session.query
         customer = session.query(Customer).filter_by(id=customer_id).first()
         if not customer:
@@ -237,17 +240,18 @@ def update_customer_stage(customer_id):
             session.add(notification)
 
         session.add(customer)
+        
+        # ✅ FIXED: Commit BEFORE refresh
         session.commit()
         
-        # CRITICAL FIX: Refresh the object to ensure the latest state is captured 
-        # before the function returns (prevents stale data read).
+        # ✅ FIXED: Refresh AFTER commit to get the latest DB state
         session.refresh(customer) 
         
         return jsonify({
             'message': 'Stage updated successfully',
             'customer_id': customer.id,
             'old_stage': old_stage,
-            'new_stage': new_stage
+            'new_stage': customer.stage  # ✅ Now this is guaranteed to be the DB value
         }), 200
 
     except Exception as e:
@@ -256,7 +260,6 @@ def update_customer_stage(customer_id):
         return jsonify({'error': str(e)}), 500
     finally:
         session.close()
-
 
 # ------------------ JOBS ------------------
 
