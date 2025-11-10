@@ -2,7 +2,8 @@ from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 import os
 from dotenv import load_dotenv
-from backend.db import Base, engine, SessionLocal, test_connection   # 👈 new imports
+# from backend.db import Base, engine, SessionLocal, test_connection   # 👈 new imports
+from .db import Base, engine, SessionLocal, test_connection 
 
 load_dotenv()
 
