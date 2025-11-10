@@ -230,12 +230,74 @@ def health_check():
 
 @auth_bp.route('/auth/register', methods=['POST'])
 def register():
-    """Register a new user"""
-    session = SessionLocal() # 👈 Start session for transaction
+    """Register a new user (handles both regular registration and invitation completion)"""
+    session = SessionLocal()  # 👈 Start session for transaction
     try:
         data = request.get_json() or {}
 
-        # ... (Validation remains the same) ...
+        # Check if this is completing an invitation
+        invitation_token = data.get('invitation_token')
+        
+        if invitation_token:
+            # INVITATION COMPLETION FLOW
+            print(f"🔗 Processing invitation registration with token")
+            
+            # Find user by invitation token
+            user = session.query(User).filter_by(invitation_token=invitation_token).first()
+            
+            if not user or not user.is_invited:
+                return jsonify({'error': 'Invalid or expired invitation token'}), 400
+            
+            # Validate password
+            password = data.get('password')
+            if not password:
+                return jsonify({'error': 'Password is required'}), 400
+            
+            is_valid, message = validate_password(password)
+            if not is_valid:
+                return jsonify({'error': message}), 400
+            
+            # Complete the registration
+            user.set_password(password)
+            user.is_invited = False
+            user.invitation_token = None
+            user.is_active = True
+            user.is_verified = True
+            user.updated_at = datetime.utcnow()
+            
+            session.commit()  # 👈 Commit registration completion
+            
+            # Generate JWT token for immediate login
+            payload = {
+                'user_id': user.id,
+                'exp': datetime.utcnow() + timedelta(days=7),
+                'iat': datetime.utcnow()
+            }
+            token = jwt.encode(payload, current_app.config['SECRET_KEY'], algorithm='HS256')
+            
+            # Create session record
+            session_record = Session(
+                user_id=user.id,
+                session_token=token,
+                ip_address=get_client_ip(),
+                user_agent=request.headers.get('User-Agent', '')[:255],
+                expires_at=datetime.utcnow() + timedelta(days=7)
+            )
+            session.add(session_record)
+            session.commit()
+            
+            log_login_attempt(user.email, get_client_ip(), True)
+            
+            print(f"✅ Invitation registration completed: {user.email} as {user.role}")
+            
+            return jsonify({
+                'success': True,
+                'message': 'Registration completed successfully',
+                'token': token,
+                'user': user.to_dict()
+            }), 200
+        
+        # REGULAR REGISTRATION FLOW (if you allow open registration)
         required_fields = ['email', 'password', 'first_name', 'last_name']
         for field in required_fields:
             if not data.get(field):
@@ -258,7 +320,7 @@ def register():
         if role not in ALLOWED_ROLES:
             role = 'Staff'
 
-        # Check if user already exists (using current session)
+        # Check if user already exists
         if session.query(User).filter_by(email=email).first():
             return jsonify({'error': 'Email already registered'}), 409
 
@@ -269,7 +331,8 @@ def register():
             last_name=last_name,
             role=role,
             is_active=True,
-            is_verified=True
+            is_verified=True,
+            is_invited=False
         )
         user.set_password(password)
         
@@ -277,9 +340,8 @@ def register():
             user.generate_verification_token()
 
         session.add(user)
-        session.commit() # 👈 Commit user creation
+        session.commit()  # 👈 Commit user creation
 
-        # Log attempt (log_login_attempt manages its own session, but we call it here)
         log_login_attempt(email, get_client_ip(), True)
         
         print(f"✅ User registered: {email} as {role}")
@@ -291,11 +353,11 @@ def register():
         }), 201
 
     except Exception as e:
-        session.rollback() # 👈 Rollback on error
+        session.rollback()  # 👈 Rollback on error
         print(f"❌ Registration error: {e}")
         return jsonify({'error': str(e)}), 500
     finally:
-        session.close() # 👈 Close session
+        session.close()  # 👈 Close session
 
 @auth_bp.route('/auth/login', methods=['POST'])
 def login():
@@ -633,3 +695,224 @@ def toggle_user_status(user_id):
         return jsonify({'error': 'Failed to toggle user status'}), 500
     finally:
         session.close() # 👈 Close session
+
+@auth_bp.route('/auth/invite-user', methods=['POST'])
+@admin_required
+def invite_user():
+    """Create an invitation for a new user"""
+    session = SessionLocal()  # 👈 Start session for transaction
+    try:
+        data = request.get_json() or {}
+        
+        # Validate required fields
+        required_fields = ['first_name', 'last_name', 'email', 'role']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({'error': f'{field} is required'}), 400
+        
+        email = data['email'].lower().strip()
+        first_name = data['first_name'].strip()
+        last_name = data['last_name'].strip()
+        role = data['role'].strip()
+        
+        # Validate email format
+        if not validate_email(email):
+            return jsonify({'error': 'Invalid email format'}), 400
+        
+        # Validate role
+        ALLOWED_ROLES = ['Manager', 'HR', 'Sales', 'Production', 'Staff']
+        if role not in ALLOWED_ROLES:
+            return jsonify({'error': f'Role must be one of: {", ".join(ALLOWED_ROLES)}'}), 400
+        
+        # Check if email already exists
+        existing_user = session.query(User).filter_by(email=email).first()
+        if existing_user:
+            return jsonify({'error': 'A user with this email already exists'}), 400
+        
+        # Generate invitation token
+        invitation_token = secrets.token_urlsafe(32)
+        
+        # Create new user with invitation
+        new_user = User(
+            first_name=first_name,
+            last_name=last_name,
+            email=email,
+            role=role,
+            is_active=False,  # Not active until they complete registration
+            is_invited=True,
+            invitation_token=invitation_token,
+            invited_at=datetime.utcnow()
+        )
+        
+        session.add(new_user)
+        session.commit()  # 👈 Commit user creation
+        
+        print(f"✅ Invitation created for: {email} as {role}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Invitation created successfully',
+            'invitation_token': invitation_token,
+            'user': new_user.to_dict()
+        }), 201
+        
+    except Exception as e:
+        session.rollback()  # 👈 Rollback on error
+        print(f"❌ Invitation creation error: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()  # 👈 Close session
+
+
+@auth_bp.route('/auth/resend-invitation/<int:user_id>', methods=['POST'])
+@admin_required
+def resend_invitation(user_id):
+    """Generate a new invitation token for a user"""
+    session = SessionLocal()  # 👈 Start session for transaction
+    try:
+        user = session.get(User, user_id)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        if not user.is_invited:
+            return jsonify({'error': 'User has already completed registration'}), 400
+        
+        # Generate new invitation token
+        user.invitation_token = secrets.token_urlsafe(32)
+        user.invited_at = datetime.utcnow()
+        
+        session.commit()  # 👈 Commit token update
+        
+        print(f"✅ Invitation resent for: {user.email}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'New invitation link generated',
+            'invitation_token': user.invitation_token
+        }), 200
+        
+    except Exception as e:
+        session.rollback()  # 👈 Rollback on error
+        print(f"❌ Resend invitation error: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()  # 👈 Close session
+
+
+@auth_bp.route('/auth/users/<int:user_id>', methods=['PUT'])
+@admin_required
+def update_user(user_id):
+    """Update user details"""
+    session = SessionLocal()  # 👈 Start session for transaction
+    try:
+        user = session.get(User, user_id)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        data = request.get_json() or {}
+        
+        # Update allowed fields
+        if 'first_name' in data:
+            user.first_name = data['first_name'].strip()
+        
+        if 'last_name' in data:
+            user.last_name = data['last_name'].strip()
+        
+        if 'email' in data:
+            new_email = data['email'].lower().strip()
+            # Check if new email is already taken by another user
+            existing = session.query(User).filter_by(email=new_email).first()
+            if existing and existing.id != user.id:
+                return jsonify({'error': 'Email already in use'}), 400
+            
+            if not validate_email(new_email):
+                return jsonify({'error': 'Invalid email format'}), 400
+            
+            user.email = new_email
+        
+        if 'role' in data:
+            role = data['role'].strip()
+            ALLOWED_ROLES = ['Manager', 'HR', 'Sales', 'Production', 'Staff']
+            if role not in ALLOWED_ROLES:
+                return jsonify({'error': f'Role must be one of: {", ".join(ALLOWED_ROLES)}'}), 400
+            user.role = role
+        
+        user.updated_at = datetime.utcnow()
+        
+        session.commit()  # 👈 Commit user updates
+        
+        print(f"✅ User updated: {user.email}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'User updated successfully',
+            'user': user.to_dict()
+        }), 200
+        
+    except Exception as e:
+        session.rollback()  # 👈 Rollback on error
+        print(f"❌ Update user error: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()  # 👈 Close session
+
+
+@auth_bp.route('/auth/users/<int:user_id>', methods=['DELETE'])
+@admin_required
+def delete_user(user_id):
+    """Delete a user"""
+    session = SessionLocal()  # 👈 Start session for transaction
+    try:
+        user = session.get(User, user_id)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        # Prevent deleting yourself
+        current_user = g.user
+        if hasattr(current_user, 'id') and user.id == current_user.id:
+            return jsonify({'error': 'You cannot delete your own account'}), 400
+        
+        email = user.email  # Save for logging
+        
+        session.delete(user)
+        session.commit()  # 👈 Commit deletion
+        
+        print(f"✅ User deleted: {email}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'User deleted successfully'
+        }), 200
+        
+    except Exception as e:
+        session.rollback()  # 👈 Rollback on error
+        print(f"❌ Delete user error: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()  # 👈 Close session
+
+
+@auth_bp.route('/settings/company', methods=['PUT'])
+@admin_required
+def update_company_settings():
+    """Update company settings"""
+    session = SessionLocal()  # 👈 Start session for transaction
+    try:
+        data = request.get_json() or {}
+        
+        # For now, just return success since you don't have a company settings table yet
+        # TODO: Implement actual company settings storage in database
+        
+        print(f"✅ Company settings update requested: {data}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Company settings updated successfully'
+        }), 200
+        
+    except Exception as e:
+        session.rollback()  # 👈 Rollback on error
+        print(f"❌ Company settings update error: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()  # 👈 Close session

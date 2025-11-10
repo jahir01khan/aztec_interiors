@@ -54,25 +54,22 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     email = Column(String(120), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
-
     first_name = Column(String(50), nullable=False)
     last_name = Column(String(50), nullable=False)
     phone = Column(String(20))
-
     role = Column(String(20), default='user')
     department = Column(String(50))
-
     is_active = Column(Boolean, default=True)
     is_verified = Column(Boolean, default=False)
-
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_login = Column(DateTime)
-
     reset_token = Column(String(100))
     reset_token_expires = Column(DateTime)
-
     verification_token = Column(String(100))
+    is_invited = Column(Boolean, default=False, nullable=False)
+    invitation_token = Column(String(100), unique=True, nullable=True, index=True)
+    invited_at = Column(DateTime, nullable=True)
 
     def __repr__(self):
         return f'<User {self.email}>'
@@ -148,6 +145,8 @@ class User(Base):
             'role': self.role,
             'department': self.department,
             'is_active': self.is_active,
+            'is_invited': self.is_invited if hasattr(self, 'is_invited') else False,
+            'invitation_token': self.invitation_token if hasattr(self, 'is_invited') and self.is_invited else None,
             'is_verified': self.is_verified,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'last_login': self.last_login.isoformat() if self.last_login else None,
