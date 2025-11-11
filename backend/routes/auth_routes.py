@@ -836,3 +836,39 @@ def update_company_settings():
         return jsonify({'error': str(e)}), 500
     finally:
         session.close()  # 👈 Close session
+
+@auth_bp.route('/auth/validate-invitation', methods=['POST'])
+def validate_invitation():
+    """Validate an invitation token and return user info"""
+    session = SessionLocal()
+    try:
+        data = request.get_json() or {}
+        
+        invitation_token = data.get('invitation_token')
+        if not invitation_token:
+            return jsonify({'error': 'Invitation token is required'}), 400
+        
+        user = session.query(User).filter_by(
+            invitation_token=invitation_token,
+            is_invited=True
+        ).first()
+        
+        if not user:
+            return jsonify({'error': 'Invalid or expired invitation token'}), 400
+        
+        return jsonify({
+            'success': True,
+            'user': {
+                'id': user.id,
+                'email': user.email,
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+                'role': user.role,
+            }
+        }), 200
+        
+    except Exception as e:
+        current_app.logger.error(f"❌ Validate invitation error: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        session.close()
